@@ -6,3 +6,19 @@ html, body {
   padding: 0;
   margin: 0;
 }
+
+/* Respeita o notch e a barra de indicador do iPhone quando o app roda
+   em modo standalone (sem a UI do Safari) */
+@media (display-mode: standalone) {
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
+/* iOS Safari dá zoom automático ao focar inputs com font-size < 16px */
+@media (max-width: 640px) {
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+}
