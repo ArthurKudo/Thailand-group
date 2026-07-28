@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
-  MapPin, Plus, Trash2, Star, Users, Wallet, Route, Calendar, Map as MapIcon,
+  MapPin, Plus, Trash2, Star, Users, Wallet, Route, Calendar,
   ChevronUp, ChevronDown, ChevronRight, ChevronLeft, X, Link as LinkIcon,
   Loader2, RefreshCw, List, CheckCircle2, AlertTriangle
 } from 'lucide-react';
@@ -27,6 +27,8 @@ const TRIP_START = new Date(2027, 1, 8); // 08/02/2027
 const FERIAS_DEADLINE = new Date(2027, 2, 2); // 02/03/2027
 
 const MONTHS_PT = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+const MONTHS_FULL_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+const WEEKDAYS_PT = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
 
 const DEFAULT_ITINERARY = [
   { id: 'i1', city: 'Bangkok', days: 3, phase: 'ferias' },
@@ -36,28 +38,6 @@ const DEFAULT_ITINERARY = [
   { id: 'i5', city: 'Krabi', days: 3, phase: 'ferias' },
   { id: 'i6', city: 'Koh Samui', days: 31, phase: 'workation' },
 ];
-
-const CITY_COORDS = {
-  'chiang rai': { x: 118, y: 30 },
-  'pai': { x: 90, y: 55 },
-  'chiang mai': { x: 100, y: 65 },
-  'sukhothai': { x: 110, y: 140 },
-  'ayutthaya': { x: 145, y: 175 },
-  'bangkok': { x: 150, y: 200 },
-  'pattaya': { x: 175, y: 215 },
-  'hua hin': { x: 130, y: 250 },
-  'kanchanaburi': { x: 110, y: 210 },
-  'surat thani': { x: 130, y: 340 },
-  'khao sok': { x: 118, y: 335 },
-  'phuket': { x: 95, y: 400 },
-  'krabi': { x: 118, y: 385 },
-  'railay': { x: 122, y: 390 },
-  'phi phi': { x: 128, y: 415 },
-  'koh lanta': { x: 115, y: 430 },
-  'koh samui': { x: 195, y: 355 },
-  'koh phangan': { x: 200, y: 335 },
-  'koh tao': { x: 205, y: 310 },
-};
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -76,13 +56,33 @@ function addDays(date, n) {
 function daysBetween(a, b) {
   return Math.round((b - a) / 86400000);
 }
-function getCoord(cityName, fallbackIdx) {
-  const key = (cityName || '').toLowerCase().trim();
-  for (const k of Object.keys(CITY_COORDS)) {
-    if (key.includes(k)) return { ...CITY_COORDS[k], known: true };
+function isSameDay(a, b) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+function buildMonthWeeks(year, month) {
+  const firstDay = new Date(year, month, 1);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const days = [];
+  for (let i = 0; i < firstDay.getDay(); i++) days.push(null);
+  for (let d = 1; d <= daysInMonth; d++) days.push(new Date(year, month, d));
+  while (days.length % 7 !== 0) days.push(null);
+  const weeks = [];
+  for (let i = 0; i < days.length; i += 7) weeks.push(days.slice(i, i + 7));
+  return weeks;
+}
+function monthsInRange(start, end) {
+  const months = [];
+  let y = start.getFullYear();
+  let m = start.getMonth();
+  while (y < end.getFullYear() || (y === end.getFullYear() && m <= end.getMonth())) {
+    months.push({ year: y, month: m });
+    m += 1;
+    if (m > 11) { m = 0; y += 1; }
   }
-  const jitter = (fallbackIdx * 37) % 40;
-  return { x: 150 + jitter - 20, y: 230 + ((fallbackIdx * 53) % 60) - 30, known: false };
+  return months;
+}
+function stopForDate(date, scheduled) {
+  return scheduled.find((s) => date >= s.start && date <= s.end);
 }
 
 async function loadShared(key, fallback) {
@@ -222,8 +222,6 @@ export default function ThailandGroupPlanner() {
     itinerary.forEach((s) => { totals[s.phase] = (totals[s.phase] || 0) + Number(s.days || 0); });
     return totals;
   }, [itinerary]);
-
-  const cities = useMemo(() => itinerary.map((s) => s.city), [itinerary]);
 
   function makeListHandlers(list, setList, storageKey) {
     async function update(next) { setList(next); await saveShared(storageKey, next); }
@@ -380,7 +378,7 @@ export default function ThailandGroupPlanner() {
           {tab === 'roteiro' && (
             <RoteiroTab
               itinerary={itinerary} scheduled={scheduled} totalsByPhase={totalsByPhase}
-              feriasStatus={feriasStatus} tripEnd={tripEnd}
+              tripEnd={tripEnd}
               onAdd={addStop} onEdit={editStop} onRemove={removeStop} onMove={moveStop}
             />
           )}
@@ -431,12 +429,11 @@ function DeadlineBanner({ status }) {
   );
 }
 
-function RoteiroTab({ itinerary, scheduled, totalsByPhase, feriasStatus, tripEnd, onAdd, onEdit, onRemove, onMove }) {
+function RoteiroTab({ itinerary, scheduled, totalsByPhase, tripEnd, onAdd, onEdit, onRemove, onMove }) {
   const [view, setView] = useState('lista');
   const views = [
     { key: 'lista', label: 'Lista', icon: List },
     { key: 'calendario', label: 'Calendário', icon: Calendar },
-    { key: 'mapa', label: 'Mapa', icon: MapIcon },
   ];
 
   return (
@@ -468,8 +465,7 @@ function RoteiroTab({ itinerary, scheduled, totalsByPhase, feriasStatus, tripEnd
       {view === 'lista' && (
         <ListaView itinerary={itinerary} scheduled={scheduled} onEdit={onEdit} onRemove={onRemove} onMove={onMove} onAdd={onAdd} />
       )}
-      {view === 'calendario' && <CalendarioView scheduled={scheduled} feriasStatus={feriasStatus} tripEnd={tripEnd} />}
-      {view === 'mapa' && <MapaView scheduled={scheduled} />}
+      {view === 'calendario' && <CalendarioView scheduled={scheduled} tripEnd={tripEnd} />}
     </div>
   );
 }
@@ -524,38 +520,31 @@ function ListaView({ itinerary, scheduled, onEdit, onRemove, onMove, onAdd }) {
   );
 }
 
-function CalendarioView({ scheduled, feriasStatus, tripEnd }) {
+function CalendarioView({ scheduled, tripEnd }) {
   if (!scheduled.length) return <p className="text-sm py-8 text-center" style={{ color: '#96A19C' }}>Adicione paradas no roteiro para ver o calendário.</p>;
 
-  const spanStart = TRIP_START;
-  const spanEnd = feriasStatus.projectedEnd > FERIAS_DEADLINE ? tripEnd : (tripEnd > FERIAS_DEADLINE ? tripEnd : FERIAS_DEADLINE);
-  const totalSpan = Math.max(1, daysBetween(spanStart, spanEnd) + 1);
-  const deadlineLeft = (daysBetween(spanStart, FERIAS_DEADLINE) / totalSpan) * 100;
+  const rangeEnd = tripEnd > FERIAS_DEADLINE ? tripEnd : FERIAS_DEADLINE;
+  const months = monthsInRange(TRIP_START, rangeEnd);
 
   return (
     <div>
-      <div className="relative rounded-xl overflow-hidden flex h-14" style={{ border: `1px solid ${LINE}` }}>
-        {scheduled.map((s) => {
-          const widthPct = (Number(s.days || 0) / totalSpan) * 100;
-          const c = PHASE_COLOR[s.phase];
-          return (
-            <div key={s.id} title={`${s.city}: ${fmtDate(s.start)} – ${fmtDate(s.end)}`}
-              className="h-full flex items-center justify-center text-[11px] font-medium px-1 overflow-hidden"
-              style={{ width: `${widthPct}%`, background: c.bg, color: c.text, borderRight: `1px solid white` }}
-            >
-              <span className="truncate">{s.city}</span>
-            </div>
-          );
-        })}
-        <div className="absolute top-0 bottom-0" style={{ left: `${deadlineLeft}%`, borderLeft: `2px dashed ${CORAL}` }} />
+      <div className="flex items-center gap-4 mb-4 text-xs flex-wrap" style={{ color: '#7A867F' }}>
+        {Object.entries(PHASE_LABEL).map(([key, label]) => (
+          <div key={key} className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: PHASE_COLOR[key].text }} />
+            {label}
+          </div>
+        ))}
+        <div className="flex items-center gap-1.5">
+          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ border: `2px dashed ${CORAL}` }} />
+          Prazo das férias
+        </div>
       </div>
 
-      <div className="relative h-5 mt-1 text-[10px]" style={{ color: '#96A19C' }}>
-        <span className="absolute left-0">{fmtDate(spanStart)}</span>
-        <span className="absolute" style={{ left: `${deadlineLeft}%`, transform: 'translateX(-50%)', color: CORAL, fontWeight: 500 }}>
-          prazo 02 mar
-        </span>
-        <span className="absolute right-0">{fmtDate(spanEnd)}</span>
+      <div className="space-y-6">
+        {months.map(({ year, month }) => (
+          <MonthGrid key={`${year}-${month}`} year={year} month={month} scheduled={scheduled} />
+        ))}
       </div>
 
       <div className="mt-6 space-y-2">
@@ -576,46 +565,45 @@ function CalendarioView({ scheduled, feriasStatus, tripEnd }) {
   );
 }
 
-function MapaView({ scheduled }) {
-  const points = scheduled.map((s, idx) => ({ ...s, coord: getCoord(s.city, idx) }));
-  const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.coord.x} ${p.coord.y}`).join(' ');
-
+function MonthGrid({ year, month, scheduled }) {
+  const weeks = buildMonthWeeks(year, month);
   return (
     <div>
-      <div className="rounded-2xl overflow-hidden" style={{ background: '#F0F6F2', border: `1px solid ${LINE}` }}>
-        <svg viewBox="0 0 300 470" width="100%" role="img" aria-label="Mapa esquemático da rota pela Tailândia">
-          <path
-            d="M150,10 C205,10 245,55 235,115 C227,165 192,182 192,225 C192,258 220,268 208,308
-               C198,345 172,338 166,378 C161,412 152,432 150,458 C148,432 139,412 134,378
-               C128,338 102,345 92,308 C80,268 108,258 108,225 C108,182 73,165 65,115
-               C55,55 95,10 150,10 Z"
-            fill={JADE_TINT} stroke="#BFE3D5" strokeWidth="1"
-          />
-          <text x="60" y="330" fontSize="9" fill="#8FA79C" fontFamily="Inter, sans-serif">Mar de Andaman</text>
-          <text x="205" y="300" fontSize="9" fill="#8FA79C" fontFamily="Inter, sans-serif">Golfo da Tailândia</text>
-
-          <path d={pathD} fill="none" stroke={JADE} strokeWidth="1.5" strokeDasharray="4 3" opacity="0.8" />
-
-          {points.map((p, idx) => {
-            const c = PHASE_COLOR[p.phase];
-            const labelBelow = idx % 2 === 0;
-            return (
-              <g key={p.id}>
-                <circle cx={p.coord.x} cy={p.coord.y} r="9" fill={c.text} stroke="white" strokeWidth="1.5" />
-                <text x={p.coord.x} y={p.coord.y + 3.5} fontSize="8.5" fill="white" textAnchor="middle" fontFamily="Inter, sans-serif" fontWeight="600">
-                  {idx + 1}
-                </text>
-                <text x={p.coord.x} y={p.coord.y + (labelBelow ? 20 : -13)} fontSize="9" fill={INK} textAnchor="middle" fontFamily="Inter, sans-serif">
-                  {p.city}
-                </text>
-              </g>
-            );
-          })}
-        </svg>
+      <div className="text-sm mb-2" style={{ fontFamily: "'Fraunces', serif", color: INK }}>
+        {MONTHS_FULL_PT[month]} de {year}
       </div>
-      <p className="text-[11px] mt-2" style={{ color: '#96A19C' }}>
-        Mapa esquemático (posições aproximadas), só pra visualizar a ordem da rota — não é escala real.
-      </p>
+      <div className="grid grid-cols-7 gap-1 mb-1">
+        {WEEKDAYS_PT.map((w) => (
+          <div key={w} className="text-center text-[10px] uppercase tracking-wide" style={{ color: '#96A19C' }}>{w}</div>
+        ))}
+      </div>
+      <div className="space-y-1">
+        {weeks.map((week, wi) => (
+          <div key={wi} className="grid grid-cols-7 gap-1">
+            {week.map((date, di) => {
+              if (!date) return <div key={di} />;
+              const stop = stopForDate(date, scheduled);
+              const isDeadline = isSameDay(date, FERIAS_DEADLINE);
+              const c = stop ? PHASE_COLOR[stop.phase] : null;
+              return (
+                <div
+                  key={di}
+                  title={stop ? `${stop.city} (${PHASE_LABEL[stop.phase]})` : undefined}
+                  className="aspect-square rounded-lg flex items-center justify-center text-xs"
+                  style={{
+                    background: c ? c.bg : 'transparent',
+                    color: c ? c.text : '#C4CCC8',
+                    fontWeight: c ? 500 : 400,
+                    border: isDeadline ? `2px dashed ${CORAL}` : c ? `1px solid ${c.border}` : '1px solid transparent',
+                  }}
+                >
+                  {date.getDate()}
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
