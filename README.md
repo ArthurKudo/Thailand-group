@@ -1,6 +1,6 @@
 # Tailândia em grupo
 
-App do grupo para organizar roteiro, hospedagem, passeios e orçamento da viagem. Next.js (App Router) + Tailwind, com estado compartilhado persistido em Redis (Upstash, via Vercel Storage).
+App do grupo para organizar roteiro, hospedagem, passeios e orçamento da viagem. Next.js (App Router) + Tailwind, com estado compartilhado persistido no Firebase Realtime Database (plano gratuito, sem cartão de crédito).
 
 ## Rodando localmente
 
@@ -27,13 +27,28 @@ Depois crie um repositório no GitHub (pelo site ou `gh repo create`) e faça o 
 
 No [vercel.com/new](https://vercel.com/new), importe o repositório. O Vercel detecta Next.js automaticamente — não precisa configurar build command nem output directory.
 
-### 3. Adicionar o banco Redis (obrigatório para os dados serem compartilhados entre o grupo)
+### 3. Criar o banco no Firebase (obrigatório para os dados serem compartilhados entre o grupo — gratuito, sem cartão)
 
 Sem isso, cada visita usa um armazenamento temporário isolado e ninguém vê os dados de ninguém.
 
-1. No projeto dentro do Vercel, vá em **Storage** → **Create Database** → escolha **Redis** (via Upstash, no Marketplace).
-2. Conecte o banco ao projeto. O Vercel injeta automaticamente as variáveis `KV_REST_API_URL` e `KV_REST_API_TOKEN`, que é exatamente o que o código em [`lib/store.js`](lib/store.js) espera.
-3. Redeploy o projeto (Deployments → ⋯ → Redeploy) para que as novas env vars sejam aplicadas.
+1. Acesse [console.firebase.google.com](https://console.firebase.google.com) e crie um projeto novo (plano Spark/gratuito — não pede cartão).
+2. No menu lateral, vá em **Build → Realtime Database → Create Database**. Escolha a região e inicie em **modo de teste** (ou modo bloqueado, ajustando as regras no passo seguinte).
+3. Na aba **Rules**, defina:
+   ```json
+   {
+     "rules": {
+       "state": {
+         ".read": true,
+         ".write": true
+       }
+     }
+   }
+   ```
+   Publique as regras. Isso libera leitura/escrita apenas dentro do caminho `state` — a URL do banco não fica exposta ao público porque só o servidor (rodando na Vercel) a conhece.
+4. Copie a **Database URL**, exibida no topo da página do Realtime Database (algo como `https://<project-id>-default-rtdb.firebaseio.com`).
+5. No projeto na Vercel, vá em **Settings → Environment Variables** e adicione:
+   - `FIREBASE_DB_URL` = a URL copiada (sem barra `/` no final)
+6. Redeploy o projeto (Deployments → ⋯ → Redeploy) para que a nova env var seja aplicada.
 
 ### 4. Pronto
 
