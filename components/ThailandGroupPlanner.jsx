@@ -131,7 +131,7 @@ function computeMonthlySchedule(expenses) {
     const perPersonPerInstallment = split.length ? perInstallment / split.length : 0;
     const [y, m] = e.purchaseDate.split('-').map(Number);
     for (let i = 0; i < installments; i++) {
-      const d = new Date(y, (m - 1) + i, 1);
+      const d = new Date(y, m + i, 1);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       if (!months[key]) months[key] = { key, year: d.getFullYear(), month: d.getMonth(), perPerson: {}, total: 0 };
       months[key].total += perInstallment;
