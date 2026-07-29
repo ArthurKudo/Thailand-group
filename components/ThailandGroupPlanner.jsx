@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   MapPin, Plus, Trash2, Star, Users, Wallet, Route, Calendar,
   ChevronUp, ChevronDown, ChevronRight, ChevronLeft, X, Link as LinkIcon,
-  Loader2, RefreshCw, List, CheckCircle2, AlertTriangle
+  Loader2, RefreshCw, List, CheckCircle2, AlertTriangle, Copy, Check
 } from 'lucide-react';
 
 const INK = '#1C2A27';
@@ -95,21 +95,75 @@ function monthsInRange(start, end) {
 function stopForDate(date, scheduled) {
   return scheduled.find((s) => date >= s.start && date <= s.end);
 }
-function buildCityColors(stops) {
+function buildCityColors(stops, overrides = {}) {
   const map = {};
   let i = 0;
   stops.forEach((s) => {
     if (!(s.city in map)) {
-      map[s.city] = CITY_PALETTE[i % CITY_PALETTE.length];
-      i += 1;
+      const idx = overrides[s.city] != null ? overrides[s.city] : i;
+      map[s.city] = CITY_PALETTE[((idx % CITY_PALETTE.length) + CITY_PALETTE.length) % CITY_PALETTE.length];
+      if (overrides[s.city] == null) i += 1;
     }
   });
   return map;
+}
+function computeMonthlySchedule(expenses) {
+  const months = {};
+  expenses.forEach((e) => {
+    if (!e.purchaseDate) return;
+    const installments = Math.max(1, Number(e.installments || 1));
+    const perInstallment = Number(e.amount || 0) / installments;
+    const split = e.splitWith && e.splitWith.length ? e.splitWith : [];
+    const perPersonPerInstallment = split.length ? perInstallment / split.length : 0;
+    const [y, m] = e.purchaseDate.split('-').map(Number);
+    for (let i = 0; i < installments; i++) {
+      const d = new Date(y, (m - 1) + i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (!months[key]) months[key] = { key, year: d.getFullYear(), month: d.getMonth(), perPerson: {}, total: 0 };
+      months[key].total += perInstallment;
+      split.forEach((name) => {
+        months[key].perPerson[name] = (months[key].perPerson[name] || 0) + perPersonPerInstallment;
+      });
+    }
+  });
+  return Object.values(months).sort((a, b) => a.key.localeCompare(b.key));
 }
 function cityAbbrev(city) {
   const words = (city || '').trim().split(/\s+/).filter(Boolean);
   if (words.length <= 1) return (words[0] || '').slice(0, 3).toUpperCase();
   return words.map((w) => w[0]).join('').toUpperCase().slice(0, 4);
+}
+
+function NumberField({ value, onChange, className, style, min, step, placeholder }) {
+  const toText = (v) => (v === 0 || v === undefined || v === null ? '' : String(v));
+  const [text, setText] = useState(toText(value));
+
+  useEffect(() => {
+    setText((current) => (current !== '' && Number(current) === Number(value) ? current : toText(value)));
+  }, [value]);
+
+  return (
+    <input
+      type="number"
+      inputMode="decimal"
+      min={min}
+      step={step}
+      placeholder={placeholder}
+      value={text}
+      onChange={(e) => {
+        const v = e.target.value;
+        setText(v);
+        if (v === '' || v === '-') return;
+        const n = Number(v);
+        if (!Number.isNaN(n)) onChange(n);
+      }}
+      onBlur={() => {
+        if (text === '' || text === '-') { setText(''); onChange(0); }
+      }}
+      className={className}
+      style={style}
+    />
+  );
 }
 
 async function loadShared(key, fallback) {
@@ -145,6 +199,7 @@ export default function ThailandGroupPlanner() {
   const [accommodations, setAccommodations] = useState([]);
   const [activities, setActivities] = useState([]);
   const [expenses, setExpenses] = useState([]);
+  const [cityColorOverrides, setCityColorOverrides] = useState({});
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
@@ -153,38 +208,48 @@ export default function ThailandGroupPlanner() {
         const personal = window.localStorage.getItem('my-name');
         if (personal) setMyName(personal);
       } catch {}
-      const [m, it, ac, at, ex] = await Promise.all([
+      const [m, it, ac, at, ex, cc] = await Promise.all([
         loadShared('members', []),
         loadShared('itinerary', DEFAULT_ITINERARY),
         loadShared('accommodations', []),
         loadShared('activities', []),
         loadShared('expenses', []),
+        loadShared('cityColorOverrides', {}),
       ]);
       setMembers(m);
       setItinerary(it);
       setAccommodations(ac);
       setActivities(at);
       setExpenses(ex);
+      setCityColorOverrides(cc);
       setBooting(false);
     })();
   }, []);
 
   const refreshShared = useCallback(async () => {
     setSyncing(true);
-    const [m, it, ac, at, ex] = await Promise.all([
+    const [m, it, ac, at, ex, cc] = await Promise.all([
       loadShared('members', []),
       loadShared('itinerary', DEFAULT_ITINERARY),
       loadShared('accommodations', []),
       loadShared('activities', []),
       loadShared('expenses', []),
+      loadShared('cityColorOverrides', {}),
     ]);
     setMembers(m);
     setItinerary(it);
     setAccommodations(ac);
     setActivities(at);
     setExpenses(ex);
+    setCityColorOverrides(cc);
     setSyncing(false);
   }, []);
+
+  async function setCityColor(city, paletteIndex) {
+    const next = { ...cityColorOverrides, [city]: paletteIndex };
+    setCityColorOverrides(next);
+    await saveShared('cityColorOverrides', next);
+  }
 
   async function handleJoin() {
     const name = nameInput.trim();
@@ -250,13 +315,13 @@ export default function ThailandGroupPlanner() {
     return totals;
   }, [itinerary]);
 
-  const cityColors = useMemo(() => buildCityColors(itinerary), [itinerary]);
+  const cityColors = useMemo(() => buildCityColors(itinerary, cityColorOverrides), [itinerary, cityColorOverrides]);
   const memberCount = members.length || 1;
 
   function makeListHandlers(list, setList, storageKey) {
     async function update(next) { setList(next); await saveShared(storageKey, next); }
-    function addItem(city) {
-      update([...list, { id: uid(), city, name: 'Nova opção', link: '', price: '', notes: '', ratings: {} }]);
+    function addItem(city, extra = {}) {
+      update([...list, { id: uid(), city, name: 'Nova opção', link: '', notes: '', ratings: {}, ...extra }]);
     }
     function removeItem(id) { update(list.filter((i) => i.id !== id)); }
     function editItem(id, patch) { update(list.map((i) => (i.id === id ? { ...i, ...patch } : i))); }
@@ -410,6 +475,7 @@ export default function ThailandGroupPlanner() {
               itinerary={itinerary} scheduled={scheduled} totalsByPhase={totalsByPhase}
               tripEnd={tripEnd} cityColors={cityColors}
               onAdd={addStop} onEdit={editStop} onRemove={removeStop} onMove={moveStop}
+              onSetCityColor={setCityColor}
             />
           )}
           {tab === 'destinos' && (
@@ -459,7 +525,7 @@ function DeadlineBanner({ status }) {
   );
 }
 
-function RoteiroTab({ itinerary, scheduled, totalsByPhase, tripEnd, cityColors, onAdd, onEdit, onRemove, onMove }) {
+function RoteiroTab({ itinerary, scheduled, totalsByPhase, tripEnd, cityColors, onAdd, onEdit, onRemove, onMove, onSetCityColor }) {
   const [view, setView] = useState('lista');
   const views = [
     { key: 'lista', label: 'Lista', icon: List },
@@ -493,54 +559,72 @@ function RoteiroTab({ itinerary, scheduled, totalsByPhase, tripEnd, cityColors, 
       </div>
 
       {view === 'lista' && (
-        <ListaView itinerary={itinerary} scheduled={scheduled} cityColors={cityColors} onEdit={onEdit} onRemove={onRemove} onMove={onMove} onAdd={onAdd} />
+        <ListaView itinerary={itinerary} scheduled={scheduled} cityColors={cityColors} onEdit={onEdit} onRemove={onRemove} onMove={onMove} onAdd={onAdd} onSetCityColor={onSetCityColor} />
       )}
       {view === 'calendario' && <CalendarioView scheduled={scheduled} tripEnd={tripEnd} cityColors={cityColors} />}
     </div>
   );
 }
 
-function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove, onAdd }) {
+function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove, onAdd, onSetCityColor }) {
+  const [colorPickerId, setColorPickerId] = useState(null);
+
   return (
     <div>
       <div className="space-y-2">
         {itinerary.map((stop, idx) => {
           const sc = scheduled[idx];
           const c = cityColors[stop.city];
+          const pickerOpen = colorPickerId === stop.id;
           return (
-            <div key={stop.id} className="flex items-center gap-2 rounded-xl px-3 py-2.5 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
-              <div className="flex flex-col -my-1">
-                <button onClick={() => onMove(stop.id, -1)} disabled={idx === 0} style={{ color: '#C4CCC8' }} className="disabled:opacity-30 p-1 -m-1 active:scale-90 transition-transform">
-                  <ChevronUp size={14} />
+            <div key={stop.id} className="rounded-xl shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+              <div className="flex items-center gap-2 px-3 py-2.5">
+                <div className="flex flex-col -my-1">
+                  <button onClick={() => onMove(stop.id, -1)} disabled={idx === 0} style={{ color: '#C4CCC8' }} className="disabled:opacity-30 p-1 -m-1 active:scale-90 transition-transform">
+                    <ChevronUp size={14} />
+                  </button>
+                  <button onClick={() => onMove(stop.id, 1)} disabled={idx === itinerary.length - 1} style={{ color: '#C4CCC8' }} className="disabled:opacity-30 p-1 -m-1 active:scale-90 transition-transform">
+                    <ChevronDown size={14} />
+                  </button>
+                </div>
+
+                <button onClick={() => setColorPickerId(pickerOpen ? null : stop.id)} title="Mudar cor da cidade" className="shrink-0 p-1 -m-1 active:scale-90 transition-transform">
+                  <span className="block w-2.5 h-2.5 rounded-full" style={{ background: c.text }} />
                 </button>
-                <button onClick={() => onMove(stop.id, 1)} disabled={idx === itinerary.length - 1} style={{ color: '#C4CCC8' }} className="disabled:opacity-30 p-1 -m-1 active:scale-90 transition-transform">
-                  <ChevronDown size={14} />
+
+                <div className="flex-1 min-w-0">
+                  <input value={stop.city} onChange={(e) => onEdit(stop.id, { city: e.target.value })}
+                    className="w-full text-sm font-medium outline-none bg-transparent" style={{ color: INK }} />
+                  {sc && <div className="text-[11px]" style={{ color: '#96A19C' }}>{fmtDate(sc.start)} – {fmtDate(sc.end)}</div>}
+                </div>
+
+                <select value={stop.phase} onChange={(e) => onEdit(stop.id, { phase: e.target.value })}
+                  className="text-xs rounded-full px-2 py-1 outline-none"
+                  style={{ background: PHASE_COLOR[stop.phase].bg, color: PHASE_COLOR[stop.phase].text, border: `1px solid ${PHASE_COLOR[stop.phase].border}` }}
+                >
+                  <option value="ferias">Férias</option>
+                  <option value="workation">Workation</option>
+                </select>
+
+                <NumberField min={0} value={stop.days} onChange={(n) => onEdit(stop.id, { days: n })}
+                  className="w-14 text-sm text-center rounded-lg py-1 outline-none" style={{ border: `1px solid ${LINE}` }} />
+                <span className="text-xs w-8" style={{ color: '#96A19C' }}>dias</span>
+
+                <button onClick={() => onRemove(stop.id)} style={{ color: '#C4CCC8' }} className="hover:!text-red-500 shrink-0 p-1.5 -m-1.5 active:scale-90 transition-transform">
+                  <Trash2 size={15} />
                 </button>
               </div>
 
-              <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c.text }} />
-
-              <div className="flex-1 min-w-0">
-                <input value={stop.city} onChange={(e) => onEdit(stop.id, { city: e.target.value })}
-                  className="w-full text-sm font-medium outline-none bg-transparent" style={{ color: INK }} />
-                {sc && <div className="text-[11px]" style={{ color: '#96A19C' }}>{fmtDate(sc.start)} – {fmtDate(sc.end)}</div>}
-              </div>
-
-              <select value={stop.phase} onChange={(e) => onEdit(stop.id, { phase: e.target.value })}
-                className="text-xs rounded-full px-2 py-1 outline-none"
-                style={{ background: PHASE_COLOR[stop.phase].bg, color: PHASE_COLOR[stop.phase].text, border: `1px solid ${PHASE_COLOR[stop.phase].border}` }}
-              >
-                <option value="ferias">Férias</option>
-                <option value="workation">Workation</option>
-              </select>
-
-              <input type="number" min={0} value={stop.days} onChange={(e) => onEdit(stop.id, { days: Number(e.target.value) })}
-                className="w-14 text-sm text-center rounded-lg py-1 outline-none" style={{ border: `1px solid ${LINE}` }} />
-              <span className="text-xs w-8" style={{ color: '#96A19C' }}>dias</span>
-
-              <button onClick={() => onRemove(stop.id)} style={{ color: '#C4CCC8' }} className="hover:!text-red-500 shrink-0 p-1.5 -m-1.5 active:scale-90 transition-transform">
-                <Trash2 size={15} />
-              </button>
+              {pickerOpen && (
+                <div className="flex items-center gap-2 flex-wrap px-3 pb-3">
+                  {CITY_PALETTE.map((palette, i) => (
+                    <button key={i} onClick={() => { onSetCityColor(stop.city, i); setColorPickerId(null); }}
+                      className="w-6 h-6 rounded-full active:scale-90 transition-transform"
+                      style={{ background: palette.text, boxShadow: c === palette ? `0 0 0 2px white, 0 0 0 3.5px ${INK}` : 'none' }}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
@@ -671,6 +755,8 @@ function DestinosTab({ itinerary, accommodations, activities, myName, accHandler
     );
   }
 
+  const selectedStop = itinerary.find((s) => s.city === selected);
+
   return (
     <div>
       <button onClick={() => setSelected(null)} className="flex items-center gap-1 text-sm mb-4" style={{ color: '#7A867F' }}>
@@ -678,33 +764,39 @@ function DestinosTab({ itinerary, accommodations, activities, myName, accHandler
       </button>
       <h2 className="text-lg mb-4" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{selected}</h2>
 
-      <CitySection title="Hospedagem" city={selected} items={accommodations.filter((i) => i.city === selected)} myName={myName} {...accHandlers} />
+      <CitySection title="Hospedagem" city={selected} type="accommodation" defaultNights={selectedStop?.days || 1}
+        items={accommodations.filter((i) => i.city === selected)} myName={myName} {...accHandlers} />
       <div className="h-6" />
-      <CitySection title="Passeios" city={selected} items={activities.filter((i) => i.city === selected)} myName={myName} {...actHandlers} />
+      <CitySection title="Passeios" city={selected} type="activity"
+        items={activities.filter((i) => i.city === selected)} myName={myName} {...actHandlers} />
     </div>
   );
 }
 
-function CitySection({ title, city, items, myName, addItem, removeItem, editItem, rateItem }) {
+function CitySection({ title, city, type, defaultNights, items, myName, addItem, removeItem, editItem, rateItem }) {
+  function handleAdd() {
+    const extra = type === 'accommodation' ? { dailyRate: 0, nights: defaultNights } : { pricePerPerson: 0 };
+    addItem(city, extra);
+  }
   return (
     <div>
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-xs font-medium uppercase tracking-wide" style={{ color: '#8A968E' }}>{title}</h3>
-        <button onClick={() => addItem(city)} className="flex items-center gap-1 text-xs font-medium" style={{ color: JADE_DARK }}>
+        <button onClick={handleAdd} className="flex items-center gap-1 text-xs font-medium py-1 active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
           <Plus size={13} /> Adicionar
         </button>
       </div>
       {items.length === 0 && <p className="text-xs py-3" style={{ color: '#96A19C' }}>Nenhuma opção cadastrada ainda.</p>}
       <div className="space-y-3">
         {items.map((item) => (
-          <OptionCard key={item.id} item={item} myName={myName} onEdit={editItem} onRemove={removeItem} onRate={rateItem} />
+          <OptionCard key={item.id} item={item} type={type} myName={myName} onEdit={editItem} onRemove={removeItem} onRate={rateItem} />
         ))}
       </div>
     </div>
   );
 }
 
-function OptionCard({ item, myName, onEdit, onRemove, onRate }) {
+function OptionCard({ item, type, myName, onEdit, onRemove, onRate }) {
   const ratingEntries = Object.entries(item.ratings || {});
   const avg = ratingEntries.length ? (ratingEntries.reduce((s, [, r]) => s + r.score, 0) / ratingEntries.length).toFixed(1) : null;
   const myRating = item.ratings?.[myName];
@@ -721,8 +813,25 @@ function OptionCard({ item, myName, onEdit, onRemove, onRate }) {
             <input value={item.link} onChange={(e) => onEdit(item.id, { link: e.target.value })}
               placeholder="link (Airbnb, Booking, GetYourGuide...)" className="flex-1 text-xs outline-none bg-transparent" style={{ color: '#7A867F' }} />
           </div>
-          <input value={item.price} onChange={(e) => onEdit(item.id, { price: e.target.value })}
-            placeholder="preço (ex: R$ 350/noite)" className="w-full text-xs outline-none bg-transparent" style={{ color: '#7A867F' }} />
+          {type === 'accommodation' ? (
+            <div className="flex items-center gap-1.5 text-xs flex-wrap" style={{ color: '#7A867F' }}>
+              <span>R$</span>
+              <NumberField value={item.dailyRate} onChange={(n) => onEdit(item.id, { dailyRate: n })}
+                placeholder="0" className="w-14 rounded-md px-1.5 py-0.5 outline-none" style={{ border: `1px solid ${LINE}` }} />
+              <span>/noite ×</span>
+              <NumberField value={item.nights} onChange={(n) => onEdit(item.id, { nights: n })}
+                placeholder="0" className="w-10 rounded-md px-1.5 py-0.5 outline-none text-center" style={{ border: `1px solid ${LINE}` }} />
+              <span>noites =</span>
+              <span className="font-medium" style={{ color: INK }}>R$ {brl((Number(item.dailyRate) || 0) * (Number(item.nights) || 0))}</span>
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5 text-xs" style={{ color: '#7A867F' }}>
+              <span>R$</span>
+              <NumberField value={item.pricePerPerson} onChange={(n) => onEdit(item.id, { pricePerPerson: n })}
+                placeholder="0" className="w-16 rounded-md px-1.5 py-0.5 outline-none" style={{ border: `1px solid ${LINE}` }} />
+              <span>por pessoa</span>
+            </div>
+          )}
         </div>
         {avg && (
           <div className="flex items-center gap-1 text-xs font-medium rounded-full px-2 py-1 shrink-0" style={{ background: '#FBF2E1', color: GOLD }}>
@@ -771,6 +880,8 @@ function OrcamentoTab({ expenses, members, myName, balances, settlements, totalS
         <span className="text-lg font-medium" style={{ color: JADE_DARK, fontFamily: "'Fraunces', serif" }}>R$ {brl(totalSpent)}</span>
       </div>
 
+      <MonthlySummary expenses={expenses} />
+
       {members.length > 0 && (
         <div className="grid grid-cols-2 gap-2 mb-4">
           {members.map((m) => {
@@ -817,7 +928,7 @@ function OrcamentoTab({ expenses, members, myName, balances, settlements, totalS
                 <input value={e.description} onChange={(ev) => onEdit(e.id, { description: ev.target.value })}
                   className="flex-1 text-sm font-medium outline-none bg-transparent" style={{ color: INK }} />
                 <span className="text-sm" style={{ color: '#96A19C' }}>R$</span>
-                <input type="number" value={e.amount} onChange={(ev) => onEdit(e.id, { amount: Number(ev.target.value) })}
+                <NumberField value={e.amount} onChange={(n) => onEdit(e.id, { amount: n })}
                   className="w-20 text-sm text-right rounded-lg px-1.5 py-1 outline-none" style={{ border: `1px solid ${LINE}` }} />
                 <button onClick={() => onRemove(e.id)} style={{ color: '#C4CCC8' }} className="hover:!text-red-500 shrink-0 p-1.5 -m-1.5 active:scale-90 transition-transform">
                   <X size={15} />
@@ -831,10 +942,16 @@ function OrcamentoTab({ expenses, members, myName, balances, settlements, totalS
                   {members.map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
                 <span className="ml-1" style={{ color: '#96A19C' }}>em</span>
-                <input type="number" min={1} value={e.installments || 1}
-                  onChange={(ev) => onEdit(e.id, { installments: Math.max(1, Number(ev.target.value)) })}
+                <NumberField min={1} value={e.installments || 1}
+                  onChange={(n) => onEdit(e.id, { installments: Math.max(1, n) })}
                   className="w-12 text-center rounded-md px-1 py-0.5 outline-none" style={{ border: `1px solid ${LINE}` }} />
                 <span style={{ color: '#96A19C' }}>parcela{installments > 1 ? 's' : ''}</span>
+              </div>
+
+              <div className="flex items-center gap-2 flex-wrap text-xs mb-2">
+                <span style={{ color: '#96A19C' }}>comprado em</span>
+                <input type="date" value={e.purchaseDate || ''} onChange={(ev) => onEdit(e.id, { purchaseDate: ev.target.value })}
+                  className="rounded-md px-1.5 py-0.5 outline-none" style={{ border: `1px solid ${LINE}`, color: e.purchaseDate ? INK : '#96A19C' }} />
               </div>
 
               <div className="flex items-center gap-2 flex-wrap text-xs mb-2">
@@ -864,9 +981,66 @@ function OrcamentoTab({ expenses, members, myName, balances, settlements, totalS
         })}
       </div>
 
-      <button onClick={onAdd} className="mt-3 flex items-center gap-1.5 text-sm font-medium" style={{ color: JADE_DARK }}>
+      <button onClick={onAdd} className="mt-3 flex items-center gap-1.5 text-sm font-medium py-1 active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
         <Plus size={15} /> Adicionar gasto
       </button>
+    </div>
+  );
+}
+
+function MonthlySummary({ expenses }) {
+  const schedule = useMemo(() => computeMonthlySchedule(expenses), [expenses]);
+  const [copied, setCopied] = useState(false);
+
+  if (!schedule.length) return null;
+
+  function buildShareText() {
+    return schedule.map((m) => {
+      const label = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
+      const lines = Object.entries(m.perPerson).map(([name, amt]) => `  ${name}: R$ ${brl(amt)}`).join('\n');
+      return `${label} (total R$ ${brl(m.total)})\n${lines}`;
+    }).join('\n\n');
+  }
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(buildShareText());
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Falha ao copiar', err);
+    }
+  }
+
+  return (
+    <div className="rounded-xl px-4 py-3 mb-4 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs font-medium uppercase tracking-wide" style={{ color: '#8A968E' }}>Resumo mensal por pessoa</div>
+        <button onClick={handleCopy} className="flex items-center gap-1 text-xs font-medium active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
+          {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? 'Copiado' : 'Copiar'}
+        </button>
+      </div>
+      <div className="space-y-3">
+        {schedule.map((m) => (
+          <div key={m.key}>
+            <div className="text-xs font-medium mb-1 flex items-center justify-between" style={{ color: INK }}>
+              <span>{MONTHS_FULL_PT[m.month]} de {m.year}</span>
+              <span style={{ color: '#96A19C', fontWeight: 400 }}>total R$ {brl(m.total)}</span>
+            </div>
+            <div className="space-y-0.5">
+              {Object.entries(m.perPerson).map(([name, amt]) => (
+                <div key={name} className="flex items-center justify-between text-xs" style={{ color: '#4A5651' }}>
+                  <span>{name}</span>
+                  <span className="font-medium">R$ {brl(amt)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="text-[11px] mt-3" style={{ color: '#96A19C' }}>
+        Baseado na data de compra e no número de parcelas de cada gasto — preencha "comprado em" nos gastos abaixo para aparecer aqui.
+      </p>
     </div>
   );
 }
