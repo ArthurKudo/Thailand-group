@@ -23,6 +23,13 @@ const PHASE_COLOR = {
   workation: { bg: '#FCF3E3', text: '#8A5A12', border: '#F0DBAE' },
 };
 
+const PAYMENT_STATUS_LABEL = { paid: 'Pago', pending: 'Pendente', late: 'Em atraso' };
+const PAYMENT_STATUS_COLOR = {
+  paid: { bg: JADE_TINT, text: JADE_DARK },
+  pending: { bg: '#FCF3E3', text: '#8A5A12' },
+  late: { bg: CORAL_TINT, text: '#8A3418' },
+};
+
 const CITY_PALETTE = [
   { bg: '#E7F4EF', text: '#08503E', border: '#BFE3D5' },
   { bg: '#E9EEFB', text: '#2C4A8A', border: '#C7D3F3' },
@@ -169,6 +176,34 @@ function activitiesToExpenses(list, scheduled) {
     };
   });
 }
+function monthPaymentStatus(year, month, paid) {
+  if (paid) return 'paid';
+  const now = new Date();
+  const monthEnd = new Date(year, month + 1, 0, 23, 59, 59);
+  return now > monthEnd ? 'late' : 'pending';
+}
+function readAndCompressImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new window.Image();
+      img.onload = () => {
+        const maxW = 640;
+        const scale = Math.min(1, maxW / img.width);
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.6));
+      };
+      img.onerror = () => reject(new Error('Falha ao carregar imagem'));
+      img.src = reader.result;
+    };
+    reader.onerror = () => reject(new Error('Falha ao ler arquivo'));
+    reader.readAsDataURL(file);
+  });
+}
 function cityAbbrev(city) {
   const words = (city || '').trim().split(/\s+/).filter(Boolean);
   if (words.length <= 1) return (words[0] || '').slice(0, 3).toUpperCase();
@@ -235,7 +270,7 @@ function TextField({ value, onChange, onCommit, className, style, placeholder })
 function ConfirmDialog({ open, title, message, onConfirm, onCancel }) {
   if (!open) return null;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(28,42,39,0.45)' }} onClick={onCancel}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(28,42,39,0.45)' }} onClick={(e) => { e.stopPropagation(); onCancel(); }}>
       <div className="w-full max-w-xs rounded-2xl p-5 shadow-lg" style={{ background: 'white' }} onClick={(e) => e.stopPropagation()}>
         <div className="text-sm font-medium mb-1.5" style={{ color: INK }}>{title}</div>
         <p className="text-xs mb-4" style={{ color: '#7A867F' }}>{message}</p>
@@ -287,6 +322,7 @@ export default function ThailandGroupPlanner() {
   const [expenses, setExpenses] = useState([]);
   const [cityColorOverrides, setCityColorOverrides] = useState({});
   const [changeLog, setChangeLog] = useState([]);
+  const [paymentStatus, setPaymentStatus] = useState({});
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
@@ -295,7 +331,7 @@ export default function ThailandGroupPlanner() {
         const personal = window.localStorage.getItem('my-name');
         if (personal) setMyName(personal);
       } catch {}
-      const [m, it, ac, at, ex, cc, cl] = await Promise.all([
+      const [m, it, ac, at, ex, cc, cl, ps] = await Promise.all([
         loadShared('members', []),
         loadShared('itinerary', DEFAULT_ITINERARY),
         loadShared('accommodations', []),
@@ -303,6 +339,7 @@ export default function ThailandGroupPlanner() {
         loadShared('expenses', []),
         loadShared('cityColorOverrides', {}),
         loadShared('changeLog', []),
+        loadShared('paymentStatus', {}),
       ]);
       setMembers(m);
       setItinerary(it);
@@ -311,13 +348,14 @@ export default function ThailandGroupPlanner() {
       setExpenses(ex);
       setCityColorOverrides(cc);
       setChangeLog(cl);
+      setPaymentStatus(ps);
       setBooting(false);
     })();
   }, []);
 
   const refreshShared = useCallback(async () => {
     setSyncing(true);
-    const [m, it, ac, at, ex, cc, cl] = await Promise.all([
+    const [m, it, ac, at, ex, cc, cl, ps] = await Promise.all([
       loadShared('members', []),
       loadShared('itinerary', DEFAULT_ITINERARY),
       loadShared('accommodations', []),
@@ -325,6 +363,7 @@ export default function ThailandGroupPlanner() {
       loadShared('expenses', []),
       loadShared('cityColorOverrides', {}),
       loadShared('changeLog', []),
+      loadShared('paymentStatus', {}),
     ]);
     setMembers(m);
     setItinerary(it);
@@ -333,6 +372,7 @@ export default function ThailandGroupPlanner() {
     setExpenses(ex);
     setCityColorOverrides(cc);
     setChangeLog(cl);
+    setPaymentStatus(ps);
     setSyncing(false);
   }, []);
 
@@ -344,6 +384,22 @@ export default function ThailandGroupPlanner() {
   }
   function logChange(message) {
     return logChangeAs(myName, message);
+  }
+
+  async function confirmPayment(name, monthKey, monthLabel, proofDataUrl) {
+    const key = `${name}__${monthKey}`;
+    const next = { ...paymentStatus, [key]: { paid: true, proof: proofDataUrl, confirmedBy: myName, confirmedAt: Date.now() } };
+    setPaymentStatus(next);
+    await saveShared('paymentStatus', next);
+    logChange(`anexou comprovante e marcou o pagamento de ${name} em ${monthLabel} como pago`);
+  }
+  async function removeProof(name, monthKey, monthLabel) {
+    const key = `${name}__${monthKey}`;
+    const next = { ...paymentStatus };
+    delete next[key];
+    setPaymentStatus(next);
+    await saveShared('paymentStatus', next);
+    logChange(`removeu o comprovante de pagamento de ${name} em ${monthLabel}`);
   }
 
   async function setCityColor(city, paletteIndex) {
@@ -624,7 +680,9 @@ export default function ThailandGroupPlanner() {
           {tab === 'orcamento' && (
             <OrcamentoTab expenses={expenses} combinedExpenses={combinedExpenses} members={members} myName={myName} balances={balances}
               settlements={settlements} totalSpent={totalSpent} onAdd={addExpense} onEdit={editExpense}
-              onRemove={removeExpense} onToggleSplit={toggleSplit} onLog={logChange} />
+              onRemove={removeExpense} onToggleSplit={toggleSplit} onLog={logChange}
+              paymentStatus={paymentStatus} onConfirmPayment={confirmPayment} onRemoveProof={removeProof}
+            />
           )}
           {tab === 'logs' && <LogsTab changeLog={changeLog} />}
         </div>
@@ -1090,7 +1148,7 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
   );
 }
 
-function OrcamentoTab({ expenses, combinedExpenses, members, myName, balances, settlements, totalSpent, onAdd, onEdit, onRemove, onToggleSplit, onLog }) {
+function OrcamentoTab({ expenses, combinedExpenses, members, myName, balances, settlements, totalSpent, onAdd, onEdit, onRemove, onToggleSplit, onLog, paymentStatus, onConfirmPayment, onRemoveProof }) {
   const [confirmExpenseId, setConfirmExpenseId] = useState(null);
   const [personModal, setPersonModal] = useState(null);
   const schedule = useMemo(() => computeMonthlySchedule(combinedExpenses), [combinedExpenses]);
@@ -1238,14 +1296,34 @@ function OrcamentoTab({ expenses, combinedExpenses, members, myName, balances, s
       />
 
       {personModal && (
-        <PersonMonthlyModal name={personModal} schedule={schedule} onClose={() => setPersonModal(null)} />
+        <PersonMonthlyModal name={personModal} schedule={schedule} onClose={() => setPersonModal(null)}
+          paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
       )}
     </div>
   );
 }
 
-function PersonMonthlyModal({ name, schedule, onClose }) {
+function PersonMonthlyModal({ name, schedule, onClose, paymentStatus, onConfirmPayment, onRemoveProof }) {
   const rows = schedule.filter((m) => m.perPerson[name] != null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [confirmRemoveKey, setConfirmRemoveKey] = useState(null);
+  const [uploadingKey, setUploadingKey] = useState(null);
+  const [uploadError, setUploadError] = useState(null);
+
+  async function handleFile(monthKey, monthLabel, file) {
+    if (!file) return;
+    setUploadError(null);
+    setUploadingKey(monthKey);
+    try {
+      const dataUrl = await readAndCompressImage(file);
+      await onConfirmPayment(name, monthKey, monthLabel, dataUrl);
+    } catch (err) {
+      setUploadError('Não deu para processar essa imagem, tenta outra.');
+    } finally {
+      setUploadingKey(null);
+    }
+  }
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(28,42,39,0.45)' }} onClick={onClose}>
       <div className="w-full max-w-sm rounded-2xl p-5 shadow-lg max-h-[80vh] overflow-y-auto" style={{ background: 'white' }} onClick={(e) => e.stopPropagation()}>
@@ -1253,19 +1331,68 @@ function PersonMonthlyModal({ name, schedule, onClose }) {
           <div className="text-base" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{name} · por mês</div>
           <button onClick={onClose} style={{ color: '#C4CCC8' }} className="p-1 -m-1 active:scale-90 transition-transform"><X size={16} /></button>
         </div>
+        {uploadError && <p className="text-xs mb-2" style={{ color: CORAL }}>{uploadError}</p>}
         {rows.length === 0 ? (
           <p className="text-xs" style={{ color: '#96A19C' }}>Nenhum valor com data definida ainda para {name}.</p>
         ) : (
           <div className="space-y-2">
-            {rows.map((m) => (
-              <div key={m.key} className="flex items-center justify-between text-sm rounded-lg px-3 py-2" style={{ background: SAND }}>
-                <span style={{ color: '#4A5651' }}>{MONTHS_FULL_PT[m.month]} de {m.year}</span>
-                <span className="font-medium" style={{ color: INK }}>R$ {brl(m.perPerson[name])}</span>
-              </div>
-            ))}
+            {rows.map((m) => {
+              const monthLabel = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
+              const record = paymentStatus[`${name}__${m.key}`];
+              const status = monthPaymentStatus(m.year, m.month, !!record?.paid);
+              const sc = PAYMENT_STATUS_COLOR[status];
+              return (
+                <div key={m.key} className="rounded-lg px-3 py-2" style={{ background: SAND }}>
+                  <div className="flex items-center justify-between text-sm">
+                    <span style={{ color: '#4A5651' }}>{monthLabel}</span>
+                    <span className="font-medium" style={{ color: INK }}>R$ {brl(m.perPerson[name])}</span>
+                  </div>
+                  <div className="flex items-center justify-between mt-1.5 gap-2">
+                    <span className="text-[11px] font-medium px-2 py-0.5 rounded-full shrink-0" style={{ background: sc.bg, color: sc.text }}>
+                      {PAYMENT_STATUS_LABEL[status]}
+                    </span>
+                    {record?.paid ? (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button onClick={() => setPreviewUrl(record.proof)} className="text-[11px] font-medium active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
+                          Ver comprovante
+                        </button>
+                        <button onClick={() => setConfirmRemoveKey(m.key)} className="text-[11px] active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
+                          Remover
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="text-[11px] font-medium active:opacity-60 transition-opacity shrink-0" style={{ color: JADE_DARK, cursor: uploadingKey === m.key ? 'default' : 'pointer' }}>
+                        {uploadingKey === m.key ? 'Enviando...' : 'Anexar comprovante'}
+                        <input type="file" accept="image/*" className="hidden" disabled={uploadingKey === m.key}
+                          onChange={(e) => { handleFile(m.key, monthLabel, e.target.files[0]); e.target.value = ''; }} />
+                      </label>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
+
+      {previewUrl && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.75)' }} onClick={(e) => { e.stopPropagation(); setPreviewUrl(null); }}>
+          <img src={previewUrl} alt="Comprovante de pagamento" className="max-w-full max-h-full rounded-lg" />
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={!!confirmRemoveKey}
+        title="Remover comprovante?"
+        message={confirmRemoveKey ? `Isso vai desfazer a confirmação de pagamento de ${name} em ${rows.find((r) => r.key === confirmRemoveKey) ? `${MONTHS_FULL_PT[rows.find((r) => r.key === confirmRemoveKey).month]} de ${rows.find((r) => r.key === confirmRemoveKey).year}` : ''}.` : ''}
+        onCancel={() => setConfirmRemoveKey(null)}
+        onConfirm={() => {
+          const row = rows.find((r) => r.key === confirmRemoveKey);
+          const monthLabel = row ? `${MONTHS_FULL_PT[row.month]} de ${row.year}` : confirmRemoveKey;
+          onRemoveProof(name, confirmRemoveKey, monthLabel);
+          setConfirmRemoveKey(null);
+        }}
+      />
     </div>
   );
 }
