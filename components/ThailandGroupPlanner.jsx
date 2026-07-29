@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   MapPin, Plus, Trash2, Star, Users, Wallet, Route, Calendar,
   ChevronUp, ChevronDown, ChevronRight, ChevronLeft, X, Link as LinkIcon,
-  Loader2, RefreshCw, List, CheckCircle2, AlertTriangle, Copy, Check
+  Loader2, RefreshCw, List, CheckCircle2, AlertTriangle, Copy, Check, History
 } from 'lucide-react';
 
 const INK = '#1C2A27';
@@ -58,6 +58,13 @@ function brl(n) {
 }
 function fmtDate(d) {
   return `${String(d.getDate()).padStart(2, '0')} ${MONTHS_PT[d.getMonth()]}`;
+}
+function fmtLogTime(timestamp) {
+  const d = new Date(timestamp);
+  const day = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  return `${day} ${MONTHS_PT[d.getMonth()]} · ${hh}:${mm}`;
 }
 function addDays(date, n) {
   const d = new Date(date);
@@ -134,9 +141,10 @@ function cityAbbrev(city) {
   return words.map((w) => w[0]).join('').toUpperCase().slice(0, 4);
 }
 
-function NumberField({ value, onChange, className, style, min, step, placeholder }) {
+function NumberField({ value, onChange, onCommit, className, style, min, step, placeholder }) {
   const toText = (v) => (v === 0 || v === undefined || v === null ? '' : String(v));
   const [text, setText] = useState(toText(value));
+  const focusValueRef = useRef(value);
 
   useEffect(() => {
     setText((current) => (current !== '' && Number(current) === Number(value) ? current : toText(value)));
@@ -150,6 +158,7 @@ function NumberField({ value, onChange, className, style, min, step, placeholder
       step={step}
       placeholder={placeholder}
       value={text}
+      onFocus={() => { focusValueRef.current = value; }}
       onChange={(e) => {
         const v = e.target.value;
         setText(v);
@@ -158,7 +167,30 @@ function NumberField({ value, onChange, className, style, min, step, placeholder
         if (!Number.isNaN(n)) onChange(n);
       }}
       onBlur={() => {
-        if (text === '' || text === '-') { setText(''); onChange(0); }
+        let finalValue = value;
+        if (text === '' || text === '-') { setText(''); onChange(0); finalValue = 0; }
+        else finalValue = Number(text);
+        if (onCommit) {
+          const before = Number(focusValueRef.current) || 0;
+          if (before !== finalValue) onCommit(before, finalValue);
+        }
+      }}
+      className={className}
+      style={style}
+    />
+  );
+}
+
+function TextField({ value, onChange, onCommit, className, style, placeholder }) {
+  const focusValueRef = useRef(value);
+  return (
+    <input
+      value={value}
+      placeholder={placeholder}
+      onFocus={() => { focusValueRef.current = value; }}
+      onChange={(e) => onChange(e.target.value)}
+      onBlur={() => {
+        if (onCommit && focusValueRef.current !== value) onCommit(focusValueRef.current, value);
       }}
       className={className}
       style={style}
@@ -200,6 +232,7 @@ export default function ThailandGroupPlanner() {
   const [activities, setActivities] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [cityColorOverrides, setCityColorOverrides] = useState({});
+  const [changeLog, setChangeLog] = useState([]);
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
@@ -208,13 +241,14 @@ export default function ThailandGroupPlanner() {
         const personal = window.localStorage.getItem('my-name');
         if (personal) setMyName(personal);
       } catch {}
-      const [m, it, ac, at, ex, cc] = await Promise.all([
+      const [m, it, ac, at, ex, cc, cl] = await Promise.all([
         loadShared('members', []),
         loadShared('itinerary', DEFAULT_ITINERARY),
         loadShared('accommodations', []),
         loadShared('activities', []),
         loadShared('expenses', []),
         loadShared('cityColorOverrides', {}),
+        loadShared('changeLog', []),
       ]);
       setMembers(m);
       setItinerary(it);
@@ -222,19 +256,21 @@ export default function ThailandGroupPlanner() {
       setActivities(at);
       setExpenses(ex);
       setCityColorOverrides(cc);
+      setChangeLog(cl);
       setBooting(false);
     })();
   }, []);
 
   const refreshShared = useCallback(async () => {
     setSyncing(true);
-    const [m, it, ac, at, ex, cc] = await Promise.all([
+    const [m, it, ac, at, ex, cc, cl] = await Promise.all([
       loadShared('members', []),
       loadShared('itinerary', DEFAULT_ITINERARY),
       loadShared('accommodations', []),
       loadShared('activities', []),
       loadShared('expenses', []),
       loadShared('cityColorOverrides', {}),
+      loadShared('changeLog', []),
     ]);
     setMembers(m);
     setItinerary(it);
@@ -242,13 +278,25 @@ export default function ThailandGroupPlanner() {
     setActivities(at);
     setExpenses(ex);
     setCityColorOverrides(cc);
+    setChangeLog(cl);
     setSyncing(false);
   }, []);
+
+  async function logChangeAs(who, message) {
+    const entry = { id: uid(), timestamp: Date.now(), who, message };
+    const next = [entry, ...changeLog].slice(0, 200);
+    setChangeLog(next);
+    await saveShared('changeLog', next);
+  }
+  function logChange(message) {
+    return logChangeAs(myName, message);
+  }
 
   async function setCityColor(city, paletteIndex) {
     const next = { ...cityColorOverrides, [city]: paletteIndex };
     setCityColorOverrides(next);
     await saveShared('cityColorOverrides', next);
+    logChange(`mudou a cor de "${city}"`);
   }
 
   async function handleJoin() {
@@ -261,6 +309,7 @@ export default function ThailandGroupPlanner() {
       const next = [...current, name];
       setMembers(next);
       await saveShared('members', next);
+      logChangeAs(name, 'entrou no grupo');
     } else {
       setMembers(current);
     }
@@ -272,12 +321,24 @@ export default function ThailandGroupPlanner() {
   }
   function addStop() {
     updateItinerary([...itinerary, { id: uid(), city: 'Nova cidade', days: 1, phase: 'ferias' }]);
+    logChange('adicionou uma nova parada ao roteiro');
   }
   function editStop(id, patch) {
     updateItinerary(itinerary.map((s) => (s.id === id ? { ...s, ...patch } : s)));
   }
+  function logStopCityChange(city, oldCity, newCity) {
+    logChange(`renomeou a parada "${oldCity}" para "${newCity}"`);
+  }
+  function logStopDaysChange(city, oldDays, newDays) {
+    logChange(`alterou os dias de "${city}" de ${oldDays} para ${newDays}`);
+  }
+  function logStopPhaseChange(city, newPhase) {
+    logChange(`mudou a fase de "${city}" para ${PHASE_LABEL[newPhase]}`);
+  }
   function removeStop(id) {
+    const stop = itinerary.find((s) => s.id === id);
     updateItinerary(itinerary.filter((s) => s.id !== id));
+    if (stop) logChange(`removeu a parada "${stop.city}" do roteiro`);
   }
   function moveStop(id, dir) {
     const idx = itinerary.findIndex((s) => s.id === id);
@@ -286,6 +347,7 @@ export default function ThailandGroupPlanner() {
     const next = [...itinerary];
     [next[idx], next[swap]] = [next[swap], next[idx]];
     updateItinerary(next);
+    logChange(`reordenou "${next[swap].city}" no roteiro`);
   }
 
   const scheduled = useMemo(() => {
@@ -318,20 +380,27 @@ export default function ThailandGroupPlanner() {
   const cityColors = useMemo(() => buildCityColors(itinerary, cityColorOverrides), [itinerary, cityColorOverrides]);
   const memberCount = members.length || 1;
 
-  function makeListHandlers(list, setList, storageKey) {
+  function makeListHandlers(list, setList, storageKey, kindLabel) {
     async function update(next) { setList(next); await saveShared(storageKey, next); }
     function addItem(city, extra = {}) {
       update([...list, { id: uid(), city, name: 'Nova opção', link: '', notes: '', ratings: {}, ...extra }]);
+      logChange(`adicionou uma nova ${kindLabel} em "${city}"`);
     }
-    function removeItem(id) { update(list.filter((i) => i.id !== id)); }
+    function removeItem(id) {
+      const item = list.find((i) => i.id === id);
+      update(list.filter((i) => i.id !== id));
+      if (item) logChange(`removeu a ${kindLabel} "${item.name}" em "${item.city}"`);
+    }
     function editItem(id, patch) { update(list.map((i) => (i.id === id ? { ...i, ...patch } : i))); }
     function rateItem(id, score, comment) {
+      const item = list.find((i) => i.id === id);
       update(list.map((i) => (i.id === id ? { ...i, ratings: { ...i.ratings, [myName]: { score, comment } } } : i)));
+      if (item) logChange(`avaliou "${item.name}" com ${score} estrela${score === 1 ? '' : 's'}`);
     }
     return { addItem, removeItem, editItem, rateItem };
   }
-  const accHandlers = makeListHandlers(accommodations, setAccommodations, 'accommodations');
-  const actHandlers = makeListHandlers(activities, setActivities, 'activities');
+  const accHandlers = makeListHandlers(accommodations, setAccommodations, 'accommodations', 'hospedagem');
+  const actHandlers = makeListHandlers(activities, setActivities, 'activities', 'passeio');
 
   async function updateExpenses(next) { setExpenses(next); await saveShared('expenses', next); }
   function addExpense() {
@@ -339,15 +408,21 @@ export default function ThailandGroupPlanner() {
       id: uid(), description: 'Novo gasto', amount: 0, installments: 1,
       paidBy: myName || members[0] || '', splitWith: members.length ? [...members] : [myName],
     }]);
+    logChange('adicionou um novo gasto');
   }
   function editExpense(id, patch) { updateExpenses(expenses.map((e) => (e.id === id ? { ...e, ...patch } : e))); }
-  function removeExpense(id) { updateExpenses(expenses.filter((e) => e.id !== id)); }
+  function removeExpense(id) {
+    const exp = expenses.find((e) => e.id === id);
+    updateExpenses(expenses.filter((e) => e.id !== id));
+    if (exp) logChange(`removeu o gasto "${exp.description}" (R$ ${brl(exp.amount)})`);
+  }
   function toggleSplit(id, name) {
     const exp = expenses.find((e) => e.id === id);
     if (!exp) return;
     const has = exp.splitWith.includes(name);
     const next = has ? exp.splitWith.filter((n) => n !== name) : [...exp.splitWith, name];
     editExpense(id, { splitWith: next });
+    logChange(has ? `removeu ${name} da divisão do gasto "${exp.description}"` : `incluiu ${name} na divisão do gasto "${exp.description}"`);
   }
 
   const balances = useMemo(() => {
@@ -428,6 +503,7 @@ export default function ThailandGroupPlanner() {
     { key: 'roteiro', label: 'Roteiro', icon: Route },
     { key: 'destinos', label: 'Destinos', icon: MapPin },
     { key: 'orcamento', label: 'Orçamento', icon: Wallet },
+    { key: 'logs', label: 'Logs', icon: History },
   ];
 
   return (
@@ -476,17 +552,19 @@ export default function ThailandGroupPlanner() {
               tripEnd={tripEnd} cityColors={cityColors}
               onAdd={addStop} onEdit={editStop} onRemove={removeStop} onMove={moveStop}
               onSetCityColor={setCityColor}
+              onLogCityChange={logStopCityChange} onLogDaysChange={logStopDaysChange} onLogPhaseChange={logStopPhaseChange}
             />
           )}
           {tab === 'destinos' && (
             <DestinosTab itinerary={itinerary} accommodations={accommodations} activities={activities}
-              myName={myName} accHandlers={accHandlers} actHandlers={actHandlers} cityColors={cityColors} />
+              myName={myName} accHandlers={accHandlers} actHandlers={actHandlers} cityColors={cityColors} onLog={logChange} />
           )}
           {tab === 'orcamento' && (
             <OrcamentoTab expenses={expenses} members={members} myName={myName} balances={balances}
               settlements={settlements} totalSpent={totalSpent} onAdd={addExpense} onEdit={editExpense}
-              onRemove={removeExpense} onToggleSplit={toggleSplit} />
+              onRemove={removeExpense} onToggleSplit={toggleSplit} onLog={logChange} />
           )}
+          {tab === 'logs' && <LogsTab changeLog={changeLog} />}
         </div>
       </div>
     </div>
@@ -525,7 +603,7 @@ function DeadlineBanner({ status }) {
   );
 }
 
-function RoteiroTab({ itinerary, scheduled, totalsByPhase, tripEnd, cityColors, onAdd, onEdit, onRemove, onMove, onSetCityColor }) {
+function RoteiroTab({ itinerary, scheduled, totalsByPhase, tripEnd, cityColors, onAdd, onEdit, onRemove, onMove, onSetCityColor, onLogCityChange, onLogDaysChange, onLogPhaseChange }) {
   const [view, setView] = useState('lista');
   const views = [
     { key: 'lista', label: 'Lista', icon: List },
@@ -559,14 +637,15 @@ function RoteiroTab({ itinerary, scheduled, totalsByPhase, tripEnd, cityColors, 
       </div>
 
       {view === 'lista' && (
-        <ListaView itinerary={itinerary} scheduled={scheduled} cityColors={cityColors} onEdit={onEdit} onRemove={onRemove} onMove={onMove} onAdd={onAdd} onSetCityColor={onSetCityColor} />
+        <ListaView itinerary={itinerary} scheduled={scheduled} cityColors={cityColors} onEdit={onEdit} onRemove={onRemove} onMove={onMove} onAdd={onAdd} onSetCityColor={onSetCityColor}
+          onLogCityChange={onLogCityChange} onLogDaysChange={onLogDaysChange} onLogPhaseChange={onLogPhaseChange} />
       )}
       {view === 'calendario' && <CalendarioView scheduled={scheduled} tripEnd={tripEnd} cityColors={cityColors} />}
     </div>
   );
 }
 
-function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove, onAdd, onSetCityColor }) {
+function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove, onAdd, onSetCityColor, onLogCityChange, onLogDaysChange, onLogPhaseChange }) {
   const [colorPickerId, setColorPickerId] = useState(null);
 
   return (
@@ -593,12 +672,13 @@ function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove,
                 </button>
 
                 <div className="flex-1 min-w-0">
-                  <input value={stop.city} onChange={(e) => onEdit(stop.id, { city: e.target.value })}
+                  <TextField value={stop.city} onChange={(v) => onEdit(stop.id, { city: v })}
+                    onCommit={(oldV, newV) => onLogCityChange(stop.city, oldV, newV)}
                     className="w-full text-sm font-medium outline-none bg-transparent" style={{ color: INK }} />
                   {sc && <div className="text-[11px]" style={{ color: '#96A19C' }}>{fmtDate(sc.start)} – {fmtDate(sc.end)}</div>}
                 </div>
 
-                <select value={stop.phase} onChange={(e) => onEdit(stop.id, { phase: e.target.value })}
+                <select value={stop.phase} onChange={(e) => { onEdit(stop.id, { phase: e.target.value }); onLogPhaseChange(stop.city, e.target.value); }}
                   className="text-xs rounded-full px-2 py-1 outline-none"
                   style={{ background: PHASE_COLOR[stop.phase].bg, color: PHASE_COLOR[stop.phase].text, border: `1px solid ${PHASE_COLOR[stop.phase].border}` }}
                 >
@@ -607,6 +687,7 @@ function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove,
                 </select>
 
                 <NumberField min={0} value={stop.days} onChange={(n) => onEdit(stop.id, { days: n })}
+                  onCommit={(oldV, newV) => onLogDaysChange(stop.city, oldV, newV)}
                   className="w-14 text-sm text-center rounded-lg py-1 outline-none" style={{ border: `1px solid ${LINE}` }} />
                 <span className="text-xs w-8" style={{ color: '#96A19C' }}>dias</span>
 
@@ -722,7 +803,7 @@ function MonthGrid({ year, month, scheduled, cityColors }) {
   );
 }
 
-function DestinosTab({ itinerary, accommodations, activities, myName, accHandlers, actHandlers, cityColors }) {
+function DestinosTab({ itinerary, accommodations, activities, myName, accHandlers, actHandlers, cityColors, onLog }) {
   const [selected, setSelected] = useState(null);
   const countFor = (city) => ({
     acc: accommodations.filter((i) => i.city === city).length,
@@ -765,15 +846,15 @@ function DestinosTab({ itinerary, accommodations, activities, myName, accHandler
       <h2 className="text-lg mb-4" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{selected}</h2>
 
       <CitySection title="Hospedagem" city={selected} type="accommodation" defaultNights={selectedStop?.days || 1}
-        items={accommodations.filter((i) => i.city === selected)} myName={myName} {...accHandlers} />
+        items={accommodations.filter((i) => i.city === selected)} myName={myName} onLog={onLog} {...accHandlers} />
       <div className="h-6" />
       <CitySection title="Passeios" city={selected} type="activity"
-        items={activities.filter((i) => i.city === selected)} myName={myName} {...actHandlers} />
+        items={activities.filter((i) => i.city === selected)} myName={myName} onLog={onLog} {...actHandlers} />
     </div>
   );
 }
 
-function CitySection({ title, city, type, defaultNights, items, myName, addItem, removeItem, editItem, rateItem }) {
+function CitySection({ title, city, type, defaultNights, items, myName, onLog, addItem, removeItem, editItem, rateItem }) {
   function handleAdd() {
     const extra = type === 'accommodation' ? { dailyRate: 0, nights: defaultNights } : { pricePerPerson: 0 };
     addItem(city, extra);
@@ -789,14 +870,15 @@ function CitySection({ title, city, type, defaultNights, items, myName, addItem,
       {items.length === 0 && <p className="text-xs py-3" style={{ color: '#96A19C' }}>Nenhuma opção cadastrada ainda.</p>}
       <div className="space-y-3">
         {items.map((item) => (
-          <OptionCard key={item.id} item={item} type={type} myName={myName} onEdit={editItem} onRemove={removeItem} onRate={rateItem} />
+          <OptionCard key={item.id} item={item} type={type} myName={myName} onEdit={editItem} onRemove={removeItem} onRate={rateItem} onLog={onLog} />
         ))}
       </div>
     </div>
   );
 }
 
-function OptionCard({ item, type, myName, onEdit, onRemove, onRate }) {
+function OptionCard({ item, type, myName, onEdit, onRemove, onRate, onLog }) {
+  const kindLabel = type === 'accommodation' ? 'hospedagem' : 'passeio';
   const ratingEntries = Object.entries(item.ratings || {});
   const avg = ratingEntries.length ? (ratingEntries.reduce((s, [, r]) => s + r.score, 0) / ratingEntries.length).toFixed(1) : null;
   const myRating = item.ratings?.[myName];
@@ -806,7 +888,8 @@ function OptionCard({ item, type, myName, onEdit, onRemove, onRate }) {
     <div className="rounded-xl p-3.5 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
       <div className="flex items-start gap-2">
         <div className="flex-1 min-w-0 space-y-1.5">
-          <input value={item.name} onChange={(e) => onEdit(item.id, { name: e.target.value })}
+          <TextField value={item.name} onChange={(v) => onEdit(item.id, { name: v })}
+            onCommit={(oldV, newV) => onLog(`renomeou a ${kindLabel} "${oldV}" para "${newV}"`)}
             className="w-full text-sm font-medium outline-none bg-transparent" style={{ color: INK }} />
           <div className="flex items-center gap-2">
             <LinkIcon size={12} className="shrink-0" style={{ color: '#C4CCC8' }} />
@@ -817,9 +900,11 @@ function OptionCard({ item, type, myName, onEdit, onRemove, onRate }) {
             <div className="flex items-center gap-1.5 text-xs flex-wrap" style={{ color: '#7A867F' }}>
               <span>R$</span>
               <NumberField value={item.dailyRate} onChange={(n) => onEdit(item.id, { dailyRate: n })}
+                onCommit={(oldV, newV) => onLog(`alterou a diária de "${item.name}" de R$ ${brl(oldV)} para R$ ${brl(newV)}`)}
                 placeholder="0" className="w-14 rounded-md px-1.5 py-0.5 outline-none" style={{ border: `1px solid ${LINE}` }} />
               <span>/noite ×</span>
               <NumberField value={item.nights} onChange={(n) => onEdit(item.id, { nights: n })}
+                onCommit={(oldV, newV) => onLog(`alterou as noites de "${item.name}" de ${oldV} para ${newV}`)}
                 placeholder="0" className="w-10 rounded-md px-1.5 py-0.5 outline-none text-center" style={{ border: `1px solid ${LINE}` }} />
               <span>noites =</span>
               <span className="font-medium" style={{ color: INK }}>R$ {brl((Number(item.dailyRate) || 0) * (Number(item.nights) || 0))}</span>
@@ -828,6 +913,7 @@ function OptionCard({ item, type, myName, onEdit, onRemove, onRate }) {
             <div className="flex items-center gap-1.5 text-xs" style={{ color: '#7A867F' }}>
               <span>R$</span>
               <NumberField value={item.pricePerPerson} onChange={(n) => onEdit(item.id, { pricePerPerson: n })}
+                onCommit={(oldV, newV) => onLog(`alterou o valor por pessoa de "${item.name}" de R$ ${brl(oldV)} para R$ ${brl(newV)}`)}
                 placeholder="0" className="w-16 rounded-md px-1.5 py-0.5 outline-none" style={{ border: `1px solid ${LINE}` }} />
               <span>por pessoa</span>
             </div>
@@ -872,7 +958,7 @@ function OptionCard({ item, type, myName, onEdit, onRemove, onRate }) {
   );
 }
 
-function OrcamentoTab({ expenses, members, myName, balances, settlements, totalSpent, onAdd, onEdit, onRemove, onToggleSplit }) {
+function OrcamentoTab({ expenses, members, myName, balances, settlements, totalSpent, onAdd, onEdit, onRemove, onToggleSplit, onLog }) {
   return (
     <div>
       <div className="rounded-2xl px-4 py-3 mb-4 flex items-center justify-between" style={{ background: JADE_TINT, border: `1px solid #BFE3D5` }}>
@@ -925,10 +1011,12 @@ function OrcamentoTab({ expenses, members, myName, balances, settlements, totalS
           return (
             <div key={e.id} className="rounded-xl p-3.5 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
               <div className="flex items-start gap-2 mb-2">
-                <input value={e.description} onChange={(ev) => onEdit(e.id, { description: ev.target.value })}
+                <TextField value={e.description} onChange={(v) => onEdit(e.id, { description: v })}
+                  onCommit={(oldV, newV) => onLog(`renomeou o gasto "${oldV}" para "${newV}"`)}
                   className="flex-1 text-sm font-medium outline-none bg-transparent" style={{ color: INK }} />
                 <span className="text-sm" style={{ color: '#96A19C' }}>R$</span>
                 <NumberField value={e.amount} onChange={(n) => onEdit(e.id, { amount: n })}
+                  onCommit={(oldV, newV) => onLog(`alterou o valor do gasto "${e.description}" de R$ ${brl(oldV)} para R$ ${brl(newV)}`)}
                   className="w-20 text-sm text-right rounded-lg px-1.5 py-1 outline-none" style={{ border: `1px solid ${LINE}` }} />
                 <button onClick={() => onRemove(e.id)} style={{ color: '#C4CCC8' }} className="hover:!text-red-500 shrink-0 p-1.5 -m-1.5 active:scale-90 transition-transform">
                   <X size={15} />
@@ -937,20 +1025,22 @@ function OrcamentoTab({ expenses, members, myName, balances, settlements, totalS
 
               <div className="flex items-center gap-2 flex-wrap text-xs mb-2">
                 <span style={{ color: '#96A19C' }}>pago por</span>
-                <select value={e.paidBy} onChange={(ev) => onEdit(e.id, { paidBy: ev.target.value })}
+                <select value={e.paidBy} onChange={(ev) => { onEdit(e.id, { paidBy: ev.target.value }); onLog(`mudou quem pagou o gasto "${e.description}" para ${ev.target.value}`); }}
                   className="rounded-md px-1.5 py-0.5 outline-none" style={{ border: `1px solid ${LINE}` }}>
                   {members.map((m) => <option key={m} value={m}>{m}</option>)}
                 </select>
                 <span className="ml-1" style={{ color: '#96A19C' }}>em</span>
                 <NumberField min={1} value={e.installments || 1}
                   onChange={(n) => onEdit(e.id, { installments: Math.max(1, n) })}
+                  onCommit={(oldV, newV) => onLog(`alterou as parcelas do gasto "${e.description}" de ${oldV} para ${newV}`)}
                   className="w-12 text-center rounded-md px-1 py-0.5 outline-none" style={{ border: `1px solid ${LINE}` }} />
                 <span style={{ color: '#96A19C' }}>parcela{installments > 1 ? 's' : ''}</span>
               </div>
 
               <div className="flex items-center gap-2 flex-wrap text-xs mb-2">
                 <span style={{ color: '#96A19C' }}>comprado em</span>
-                <input type="date" value={e.purchaseDate || ''} onChange={(ev) => onEdit(e.id, { purchaseDate: ev.target.value })}
+                <input type="date" value={e.purchaseDate || ''}
+                  onChange={(ev) => { onEdit(e.id, { purchaseDate: ev.target.value }); onLog(`definiu a data de compra do gasto "${e.description}" para ${ev.target.value}`); }}
                   className="rounded-md px-1.5 py-0.5 outline-none" style={{ border: `1px solid ${LINE}`, color: e.purchaseDate ? INK : '#96A19C' }} />
               </div>
 
@@ -984,6 +1074,27 @@ function OrcamentoTab({ expenses, members, myName, balances, settlements, totalS
       <button onClick={onAdd} className="mt-3 flex items-center gap-1.5 text-sm font-medium py-1 active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
         <Plus size={15} /> Adicionar gasto
       </button>
+    </div>
+  );
+}
+
+function LogsTab({ changeLog }) {
+  if (!changeLog.length) {
+    return <p className="text-sm py-8 text-center" style={{ color: '#96A19C' }}>Nenhuma alteração registrada ainda.</p>;
+  }
+  return (
+    <div>
+      <p className="text-xs mb-3" style={{ color: '#96A19C' }}>Histórico de tudo que foi alterado no app, mais recente primeiro.</p>
+      <div className="space-y-2">
+        {changeLog.map((entry) => (
+          <div key={entry.id} className="rounded-xl px-3.5 py-2.5 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+            <div className="text-sm" style={{ color: INK }}>
+              <span className="font-medium">{entry.who || 'Alguém'}</span> {entry.message}
+            </div>
+            <div className="text-[11px] mt-0.5" style={{ color: '#96A19C' }}>{fmtLogTime(entry.timestamp)}</div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
