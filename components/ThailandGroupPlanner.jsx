@@ -135,6 +135,40 @@ function computeMonthlySchedule(expenses) {
   });
   return Object.values(months).sort((a, b) => a.key.localeCompare(b.key));
 }
+function isoDateFromDate(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function accommodationsToExpenses(list, scheduled) {
+  return list.map((item) => {
+    const stop = scheduled.find((s) => s.city === item.city);
+    const totalPrice = item.totalPrice ?? ((Number(item.dailyRate) || 0) * (Number(item.nights) || 0));
+    return {
+      id: `acc-${item.id}`,
+      description: `Hospedagem: ${item.name} (${item.city})`,
+      amount: Number(totalPrice) || 0,
+      installments: 1,
+      paidBy: null,
+      splitWith: item.splitWith || [],
+      purchaseDate: stop ? isoDateFromDate(stop.start) : null,
+    };
+  });
+}
+function activitiesToExpenses(list, scheduled) {
+  return list.map((item) => {
+    const stop = scheduled.find((s) => s.city === item.city);
+    const guests = (item.splitWith && item.splitWith.length) || 0;
+    const total = (Number(item.pricePerPerson) || 0) * guests;
+    return {
+      id: `act-${item.id}`,
+      description: `Passeio: ${item.name} (${item.city})`,
+      amount: total,
+      installments: 1,
+      paidBy: null,
+      splitWith: item.splitWith || [],
+      purchaseDate: stop ? isoDateFromDate(stop.start) : null,
+    };
+  });
+}
 function cityAbbrev(city) {
   const words = (city || '').trim().split(/\s+/).filter(Boolean);
   if (words.length <= 1) return (words[0] || '').slice(0, 3).toUpperCase();
@@ -195,6 +229,26 @@ function TextField({ value, onChange, onCommit, className, style, placeholder })
       className={className}
       style={style}
     />
+  );
+}
+
+function ConfirmDialog({ open, title, message, onConfirm, onCancel }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(28,42,39,0.45)' }} onClick={onCancel}>
+      <div className="w-full max-w-xs rounded-2xl p-5 shadow-lg" style={{ background: 'white' }} onClick={(e) => e.stopPropagation()}>
+        <div className="text-sm font-medium mb-1.5" style={{ color: INK }}>{title}</div>
+        <p className="text-xs mb-4" style={{ color: '#7A867F' }}>{message}</p>
+        <div className="flex gap-2">
+          <button onClick={onCancel} className="flex-1 rounded-lg py-2 text-sm font-medium active:opacity-70 transition-opacity" style={{ border: `1px solid ${LINE}`, color: '#4A5651' }}>
+            Cancelar
+          </button>
+          <button onClick={onConfirm} className="flex-1 rounded-lg py-2 text-sm font-medium text-white active:opacity-80 transition-opacity" style={{ background: CORAL }}>
+            Excluir
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -425,19 +479,27 @@ export default function ThailandGroupPlanner() {
     logChange(has ? `removeu ${name} da divisão do gasto "${exp.description}"` : `incluiu ${name} na divisão do gasto "${exp.description}"`);
   }
 
+  const combinedExpenses = useMemo(() => [
+    ...expenses,
+    ...accommodationsToExpenses(accommodations, scheduled),
+    ...activitiesToExpenses(activities, scheduled),
+  ], [expenses, accommodations, activities, scheduled]);
+
   const balances = useMemo(() => {
     const bal = {};
     members.forEach((m) => (bal[m] = { paid: 0, owed: 0 }));
-    expenses.forEach((e) => {
+    combinedExpenses.forEach((e) => {
       const amount = Number(e.amount || 0);
       const split = e.splitWith && e.splitWith.length ? e.splitWith : [];
-      if (!bal[e.paidBy]) bal[e.paidBy] = { paid: 0, owed: 0 };
-      bal[e.paidBy].paid += amount;
+      if (e.paidBy) {
+        if (!bal[e.paidBy]) bal[e.paidBy] = { paid: 0, owed: 0 };
+        bal[e.paidBy].paid += amount;
+      }
       const share = split.length ? amount / split.length : 0;
       split.forEach((n) => { if (!bal[n]) bal[n] = { paid: 0, owed: 0 }; bal[n].owed += share; });
     });
     return bal;
-  }, [members, expenses]);
+  }, [members, combinedExpenses]);
 
   const settlements = useMemo(() => {
     const nets = Object.entries(balances).map(([name, b]) => ({ name, net: b.paid - b.owed }));
@@ -455,7 +517,7 @@ export default function ThailandGroupPlanner() {
     return result;
   }, [balances]);
 
-  const totalSpent = useMemo(() => expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0), [expenses]);
+  const totalSpent = useMemo(() => combinedExpenses.reduce((sum, e) => sum + Number(e.amount || 0), 0), [combinedExpenses]);
 
   const fontStyle = { fontFamily: "'Fraunces', serif" };
 
@@ -557,10 +619,10 @@ export default function ThailandGroupPlanner() {
           )}
           {tab === 'destinos' && (
             <DestinosTab itinerary={itinerary} accommodations={accommodations} activities={activities}
-              myName={myName} accHandlers={accHandlers} actHandlers={actHandlers} cityColors={cityColors} onLog={logChange} />
+              myName={myName} members={members} accHandlers={accHandlers} actHandlers={actHandlers} cityColors={cityColors} onLog={logChange} />
           )}
           {tab === 'orcamento' && (
-            <OrcamentoTab expenses={expenses} members={members} myName={myName} balances={balances}
+            <OrcamentoTab expenses={expenses} combinedExpenses={combinedExpenses} members={members} myName={myName} balances={balances}
               settlements={settlements} totalSpent={totalSpent} onAdd={addExpense} onEdit={editExpense}
               onRemove={removeExpense} onToggleSplit={toggleSplit} onLog={logChange} />
           )}
@@ -647,6 +709,7 @@ function RoteiroTab({ itinerary, scheduled, totalsByPhase, tripEnd, cityColors, 
 
 function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove, onAdd, onSetCityColor, onLogCityChange, onLogDaysChange, onLogPhaseChange }) {
   const [colorPickerId, setColorPickerId] = useState(null);
+  const [confirmStop, setConfirmStop] = useState(null);
 
   return (
     <div>
@@ -691,7 +754,7 @@ function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove,
                   className="w-14 text-sm text-center rounded-lg py-1 outline-none" style={{ border: `1px solid ${LINE}` }} />
                 <span className="text-xs w-8" style={{ color: '#96A19C' }}>dias</span>
 
-                <button onClick={() => onRemove(stop.id)} style={{ color: '#C4CCC8' }} className="hover:!text-red-500 shrink-0 p-1.5 -m-1.5 active:scale-90 transition-transform">
+                <button onClick={() => setConfirmStop(stop)} style={{ color: '#C4CCC8' }} className="hover:!text-red-500 shrink-0 p-1.5 -m-1.5 active:scale-90 transition-transform">
                   <Trash2 size={15} />
                 </button>
               </div>
@@ -714,6 +777,14 @@ function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove,
       <button onClick={onAdd} className="mt-3 flex items-center gap-1.5 text-sm font-medium py-1 active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
         <Plus size={15} /> Adicionar parada
       </button>
+
+      <ConfirmDialog
+        open={!!confirmStop}
+        title="Excluir parada?"
+        message={confirmStop ? `Isso vai remover "${confirmStop.city}" do roteiro.` : ''}
+        onCancel={() => setConfirmStop(null)}
+        onConfirm={() => { onRemove(confirmStop.id); setConfirmStop(null); }}
+      />
     </div>
   );
 }
@@ -803,7 +874,7 @@ function MonthGrid({ year, month, scheduled, cityColors }) {
   );
 }
 
-function DestinosTab({ itinerary, accommodations, activities, myName, accHandlers, actHandlers, cityColors, onLog }) {
+function DestinosTab({ itinerary, accommodations, activities, myName, members, accHandlers, actHandlers, cityColors, onLog }) {
   const [selected, setSelected] = useState(null);
   const countFor = (city) => ({
     acc: accommodations.filter((i) => i.city === city).length,
@@ -846,17 +917,19 @@ function DestinosTab({ itinerary, accommodations, activities, myName, accHandler
       <h2 className="text-lg mb-4" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{selected}</h2>
 
       <CitySection title="Hospedagem" city={selected} type="accommodation" defaultNights={selectedStop?.days || 1}
-        items={accommodations.filter((i) => i.city === selected)} myName={myName} onLog={onLog} {...accHandlers} />
+        items={accommodations.filter((i) => i.city === selected)} myName={myName} members={members} onLog={onLog} {...accHandlers} />
       <div className="h-6" />
       <CitySection title="Passeios" city={selected} type="activity"
-        items={activities.filter((i) => i.city === selected)} myName={myName} onLog={onLog} {...actHandlers} />
+        items={activities.filter((i) => i.city === selected)} myName={myName} members={members} onLog={onLog} {...actHandlers} />
     </div>
   );
 }
 
-function CitySection({ title, city, type, defaultNights, items, myName, onLog, addItem, removeItem, editItem, rateItem }) {
+function CitySection({ title, city, type, defaultNights, items, myName, members, onLog, addItem, removeItem, editItem, rateItem }) {
   function handleAdd() {
-    const extra = type === 'accommodation' ? { dailyRate: 0, nights: defaultNights } : { pricePerPerson: 0 };
+    const extra = type === 'accommodation'
+      ? { totalPrice: 0, nights: defaultNights, splitWith: members.length ? [...members] : [] }
+      : { pricePerPerson: 0, splitWith: members.length ? [...members] : [] };
     addItem(city, extra);
   }
   return (
@@ -870,19 +943,34 @@ function CitySection({ title, city, type, defaultNights, items, myName, onLog, a
       {items.length === 0 && <p className="text-xs py-3" style={{ color: '#96A19C' }}>Nenhuma opção cadastrada ainda.</p>}
       <div className="space-y-3">
         {items.map((item) => (
-          <OptionCard key={item.id} item={item} type={type} myName={myName} onEdit={editItem} onRemove={removeItem} onRate={rateItem} onLog={onLog} />
+          <OptionCard key={item.id} item={item} type={type} myName={myName} members={members} onEdit={editItem} onRemove={removeItem} onRate={rateItem} onLog={onLog} />
         ))}
       </div>
     </div>
   );
 }
 
-function OptionCard({ item, type, myName, onEdit, onRemove, onRate, onLog }) {
+function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onLog }) {
   const kindLabel = type === 'accommodation' ? 'hospedagem' : 'passeio';
   const ratingEntries = Object.entries(item.ratings || {});
   const avg = ratingEntries.length ? (ratingEntries.reduce((s, [, r]) => s + r.score, 0) / ratingEntries.length).toFixed(1) : null;
   const myRating = item.ratings?.[myName];
   const [comment, setComment] = useState(myRating?.comment || '');
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const split = item.splitWith || [];
+  const guests = split.length;
+
+  function toggleGuest(name) {
+    const has = split.includes(name);
+    const next = has ? split.filter((n) => n !== name) : [...split, name];
+    onEdit(item.id, { splitWith: next });
+    onLog(has ? `removeu ${name} da divisão da ${kindLabel} "${item.name}"` : `incluiu ${name} na divisão da ${kindLabel} "${item.name}"`);
+  }
+
+  const totalPrice = item.totalPrice ?? ((Number(item.dailyRate) || 0) * (Number(item.nights) || 0));
+  const nights = Number(item.nights) || 0;
+  const dailyRate = nights > 0 ? totalPrice / nights : 0;
+  const perPersonPerNight = guests > 0 ? dailyRate / guests : 0;
 
   return (
     <div className="rounded-xl p-3.5 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
@@ -897,25 +985,61 @@ function OptionCard({ item, type, myName, onEdit, onRemove, onRate, onLog }) {
               placeholder="link (Airbnb, Booking, GetYourGuide...)" className="flex-1 text-xs outline-none bg-transparent" style={{ color: '#7A867F' }} />
           </div>
           {type === 'accommodation' ? (
-            <div className="flex items-center gap-1.5 text-xs flex-wrap" style={{ color: '#7A867F' }}>
-              <span>R$</span>
-              <NumberField value={item.dailyRate} onChange={(n) => onEdit(item.id, { dailyRate: n })}
-                onCommit={(oldV, newV) => onLog(`alterou a diária de "${item.name}" de R$ ${brl(oldV)} para R$ ${brl(newV)}`)}
-                placeholder="0" className="w-14 rounded-md px-1.5 py-0.5 outline-none" style={{ border: `1px solid ${LINE}` }} />
-              <span>/noite ×</span>
-              <NumberField value={item.nights} onChange={(n) => onEdit(item.id, { nights: n })}
-                onCommit={(oldV, newV) => onLog(`alterou as noites de "${item.name}" de ${oldV} para ${newV}`)}
-                placeholder="0" className="w-10 rounded-md px-1.5 py-0.5 outline-none text-center" style={{ border: `1px solid ${LINE}` }} />
-              <span>noites =</span>
-              <span className="font-medium" style={{ color: INK }}>R$ {brl((Number(item.dailyRate) || 0) * (Number(item.nights) || 0))}</span>
+            <div style={{ color: '#7A867F' }}>
+              <div className="flex items-center gap-1.5 text-xs flex-wrap">
+                <span>R$</span>
+                <NumberField value={totalPrice} onChange={(n) => onEdit(item.id, { totalPrice: n })}
+                  onCommit={(oldV, newV) => onLog(`alterou o valor total da hospedagem "${item.name}" de R$ ${brl(oldV)} para R$ ${brl(newV)}`)}
+                  placeholder="0" className="w-16 rounded-md px-1.5 py-0.5 outline-none" style={{ border: `1px solid ${LINE}` }} />
+                <span>total ÷</span>
+                <NumberField value={item.nights} onChange={(n) => onEdit(item.id, { nights: n })}
+                  onCommit={(oldV, newV) => onLog(`alterou as noites de "${item.name}" de ${oldV} para ${newV}`)}
+                  placeholder="0" className="w-10 rounded-md px-1.5 py-0.5 outline-none text-center" style={{ border: `1px solid ${LINE}` }} />
+                <span>noites</span>
+              </div>
+              <div className="text-xs mt-1">
+                = <span className="font-medium" style={{ color: INK }}>R$ {brl(dailyRate)}</span>/noite
+                {guests > 0 && (
+                  <> · <span className="font-medium" style={{ color: INK }}>R$ {brl(perPersonPerNight)}</span>/noite por pessoa ({guests} hóspede{guests === 1 ? '' : 's'})</>
+                )}
+              </div>
+              <div className="flex items-center gap-1.5 flex-wrap text-xs mt-1.5">
+                <span>dividir com</span>
+                {members.map((m) => (
+                  <button key={m} onClick={() => toggleGuest(m)}
+                    className="px-2 py-0.5 rounded-full active:scale-95 transition-transform"
+                    style={split.includes(m) ? { background: JADE, color: 'white', border: `1px solid ${JADE}` } : { color: '#7A867F', border: `1px solid ${LINE}` }}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
             </div>
           ) : (
-            <div className="flex items-center gap-1.5 text-xs" style={{ color: '#7A867F' }}>
-              <span>R$</span>
-              <NumberField value={item.pricePerPerson} onChange={(n) => onEdit(item.id, { pricePerPerson: n })}
-                onCommit={(oldV, newV) => onLog(`alterou o valor por pessoa de "${item.name}" de R$ ${brl(oldV)} para R$ ${brl(newV)}`)}
-                placeholder="0" className="w-16 rounded-md px-1.5 py-0.5 outline-none" style={{ border: `1px solid ${LINE}` }} />
-              <span>por pessoa</span>
+            <div style={{ color: '#7A867F' }}>
+              <div className="flex items-center gap-1.5 text-xs">
+                <span>R$</span>
+                <NumberField value={item.pricePerPerson} onChange={(n) => onEdit(item.id, { pricePerPerson: n })}
+                  onCommit={(oldV, newV) => onLog(`alterou o valor por pessoa de "${item.name}" de R$ ${brl(oldV)} para R$ ${brl(newV)}`)}
+                  placeholder="0" className="w-16 rounded-md px-1.5 py-0.5 outline-none" style={{ border: `1px solid ${LINE}` }} />
+                <span>por pessoa</span>
+              </div>
+              {guests > 0 && (
+                <div className="text-xs mt-1">
+                  total <span className="font-medium" style={{ color: INK }}>R$ {brl((Number(item.pricePerPerson) || 0) * guests)}</span> ({guests} pessoa{guests === 1 ? '' : 's'})
+                </div>
+              )}
+              <div className="flex items-center gap-1.5 flex-wrap text-xs mt-1.5">
+                <span>quem vai</span>
+                {members.map((m) => (
+                  <button key={m} onClick={() => toggleGuest(m)}
+                    className="px-2 py-0.5 rounded-full active:scale-95 transition-transform"
+                    style={split.includes(m) ? { background: JADE, color: 'white', border: `1px solid ${JADE}` } : { color: '#7A867F', border: `1px solid ${LINE}` }}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>
@@ -924,10 +1048,18 @@ function OptionCard({ item, type, myName, onEdit, onRemove, onRate, onLog }) {
             <Star size={11} fill="currentColor" /> {avg}
           </div>
         )}
-        <button onClick={() => onRemove(item.id)} style={{ color: '#C4CCC8' }} className="hover:!text-red-500 shrink-0 p-1.5 -m-1.5 active:scale-90 transition-transform">
+        <button onClick={() => setConfirmOpen(true)} style={{ color: '#C4CCC8' }} className="hover:!text-red-500 shrink-0 p-1.5 -m-1.5 active:scale-90 transition-transform">
           <X size={15} />
         </button>
       </div>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title={`Excluir ${kindLabel}?`}
+        message={`Isso vai remover "${item.name}" e seu valor não vai mais contar no orçamento.`}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={() => { onRemove(item.id); setConfirmOpen(false); }}
+      />
 
       <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${LINE}` }}>
         <div className="flex items-center gap-1 mb-1.5">
@@ -958,7 +1090,13 @@ function OptionCard({ item, type, myName, onEdit, onRemove, onRate, onLog }) {
   );
 }
 
-function OrcamentoTab({ expenses, members, myName, balances, settlements, totalSpent, onAdd, onEdit, onRemove, onToggleSplit, onLog }) {
+function OrcamentoTab({ expenses, combinedExpenses, members, myName, balances, settlements, totalSpent, onAdd, onEdit, onRemove, onToggleSplit, onLog }) {
+  const [confirmExpenseId, setConfirmExpenseId] = useState(null);
+  const [personModal, setPersonModal] = useState(null);
+  const schedule = useMemo(() => computeMonthlySchedule(combinedExpenses), [combinedExpenses]);
+  const autoItems = useMemo(() => combinedExpenses.filter((e) => !e.paidBy), [combinedExpenses]);
+  const confirmExpense = expenses.find((e) => e.id === confirmExpenseId);
+
   return (
     <div>
       <div className="rounded-2xl px-4 py-3 mb-4 flex items-center justify-between" style={{ background: JADE_TINT, border: `1px solid #BFE3D5` }}>
@@ -966,7 +1104,22 @@ function OrcamentoTab({ expenses, members, myName, balances, settlements, totalS
         <span className="text-lg font-medium" style={{ color: JADE_DARK, fontFamily: "'Fraunces', serif" }}>R$ {brl(totalSpent)}</span>
       </div>
 
-      <MonthlySummary expenses={expenses} />
+      {autoItems.length > 0 && (
+        <div className="rounded-xl px-4 py-3 mb-4 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+          <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: '#8A968E' }}>Hospedagens e passeios (de Destinos)</div>
+          <div className="space-y-1.5">
+            {autoItems.map((e) => (
+              <div key={e.id} className="flex items-center justify-between text-xs" style={{ color: '#4A5651' }}>
+                <span>{e.description}</span>
+                <span className="font-medium">R$ {brl(e.amount)}</span>
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] mt-2" style={{ color: '#96A19C' }}>Editável na aba Destinos — já entra nos totais e no resumo abaixo.</p>
+        </div>
+      )}
+
+      <MonthlySummary schedule={schedule} />
 
       {members.length > 0 && (
         <div className="grid grid-cols-2 gap-2 mb-4">
@@ -974,13 +1127,14 @@ function OrcamentoTab({ expenses, members, myName, balances, settlements, totalS
             const b = balances[m] || { paid: 0, owed: 0 };
             const net = b.paid - b.owed;
             return (
-              <div key={m} className="rounded-xl px-3 py-2.5 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+              <button key={m} onClick={() => setPersonModal(m)}
+                className="text-left rounded-xl px-3 py-2.5 shadow-sm active:opacity-70 transition-opacity" style={{ background: 'white', border: `1px solid ${LINE}` }}>
                 <div className="text-xs" style={{ color: '#96A19C' }}>{m}</div>
                 <div className="text-sm font-medium" style={{ color: net >= 0 ? JADE_DARK : CORAL }}>
                   {net >= 0 ? '+' : '-'}R$ {brl(Math.abs(net))}
                 </div>
                 <div className="text-[11px]" style={{ color: '#96A19C' }}>pagou R$ {brl(b.paid)} · parte R$ {brl(b.owed)}</div>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -1018,7 +1172,7 @@ function OrcamentoTab({ expenses, members, myName, balances, settlements, totalS
                 <NumberField value={e.amount} onChange={(n) => onEdit(e.id, { amount: n })}
                   onCommit={(oldV, newV) => onLog(`alterou o valor do gasto "${e.description}" de R$ ${brl(oldV)} para R$ ${brl(newV)}`)}
                   className="w-20 text-sm text-right rounded-lg px-1.5 py-1 outline-none" style={{ border: `1px solid ${LINE}` }} />
-                <button onClick={() => onRemove(e.id)} style={{ color: '#C4CCC8' }} className="hover:!text-red-500 shrink-0 p-1.5 -m-1.5 active:scale-90 transition-transform">
+                <button onClick={() => setConfirmExpenseId(e.id)} style={{ color: '#C4CCC8' }} className="hover:!text-red-500 shrink-0 p-1.5 -m-1.5 active:scale-90 transition-transform">
                   <X size={15} />
                 </button>
               </div>
@@ -1074,6 +1228,44 @@ function OrcamentoTab({ expenses, members, myName, balances, settlements, totalS
       <button onClick={onAdd} className="mt-3 flex items-center gap-1.5 text-sm font-medium py-1 active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
         <Plus size={15} /> Adicionar gasto
       </button>
+
+      <ConfirmDialog
+        open={!!confirmExpenseId}
+        title="Excluir gasto?"
+        message={confirmExpense ? `Isso vai remover "${confirmExpense.description}" (R$ ${brl(confirmExpense.amount)}).` : ''}
+        onCancel={() => setConfirmExpenseId(null)}
+        onConfirm={() => { onRemove(confirmExpenseId); setConfirmExpenseId(null); }}
+      />
+
+      {personModal && (
+        <PersonMonthlyModal name={personModal} schedule={schedule} onClose={() => setPersonModal(null)} />
+      )}
+    </div>
+  );
+}
+
+function PersonMonthlyModal({ name, schedule, onClose }) {
+  const rows = schedule.filter((m) => m.perPerson[name] != null);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(28,42,39,0.45)' }} onClick={onClose}>
+      <div className="w-full max-w-sm rounded-2xl p-5 shadow-lg max-h-[80vh] overflow-y-auto" style={{ background: 'white' }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-base" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{name} · por mês</div>
+          <button onClick={onClose} style={{ color: '#C4CCC8' }} className="p-1 -m-1 active:scale-90 transition-transform"><X size={16} /></button>
+        </div>
+        {rows.length === 0 ? (
+          <p className="text-xs" style={{ color: '#96A19C' }}>Nenhum valor com data definida ainda para {name}.</p>
+        ) : (
+          <div className="space-y-2">
+            {rows.map((m) => (
+              <div key={m.key} className="flex items-center justify-between text-sm rounded-lg px-3 py-2" style={{ background: SAND }}>
+                <span style={{ color: '#4A5651' }}>{MONTHS_FULL_PT[m.month]} de {m.year}</span>
+                <span className="font-medium" style={{ color: INK }}>R$ {brl(m.perPerson[name])}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1099,8 +1291,7 @@ function LogsTab({ changeLog }) {
   );
 }
 
-function MonthlySummary({ expenses }) {
-  const schedule = useMemo(() => computeMonthlySchedule(expenses), [expenses]);
+function MonthlySummary({ schedule }) {
   const [copied, setCopied] = useState(false);
 
   if (!schedule.length) return null;
