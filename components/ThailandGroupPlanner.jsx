@@ -146,7 +146,7 @@ function isoDateFromDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 function accommodationsToExpenses(list, scheduled) {
-  return list.map((item) => {
+  return list.filter((item) => item.addedToBudget).map((item) => {
     const stop = scheduled.find((s) => s.city === item.city);
     const totalPrice = item.totalPrice ?? ((Number(item.dailyRate) || 0) * (Number(item.nights) || 0));
     return {
@@ -154,14 +154,14 @@ function accommodationsToExpenses(list, scheduled) {
       description: `Hospedagem: ${item.name} (${item.city})`,
       amount: Number(totalPrice) || 0,
       installments: 1,
-      paidBy: null,
+      paidBy: item.paidBy || null,
       splitWith: item.splitWith || [],
       purchaseDate: stop ? isoDateFromDate(stop.start) : null,
     };
   });
 }
 function activitiesToExpenses(list, scheduled) {
-  return list.map((item) => {
+  return list.filter((item) => item.addedToBudget).map((item) => {
     const stop = scheduled.find((s) => s.city === item.city);
     const guests = (item.splitWith && item.splitWith.length) || 0;
     const total = (Number(item.pricePerPerson) || 0) * guests;
@@ -170,7 +170,7 @@ function activitiesToExpenses(list, scheduled) {
       description: `Passeio: ${item.name} (${item.city})`,
       amount: total,
       installments: 1,
-      paidBy: null,
+      paidBy: item.paidBy || null,
       splitWith: item.splitWith || [],
       purchaseDate: stop ? isoDateFromDate(stop.start) : null,
     };
@@ -777,9 +777,9 @@ function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove,
           const c = cityColors[stop.city];
           const pickerOpen = colorPickerId === stop.id;
           return (
-            <div key={stop.id} className="rounded-xl shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
-              <div className="flex items-center gap-2 px-3 py-2.5">
-                <div className="flex flex-col -my-1">
+            <div key={stop.id} className="rounded-xl shadow-sm px-3 py-2.5" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+              <div className="flex items-center gap-2">
+                <div className="flex flex-col -my-1 shrink-0">
                   <button onClick={() => onMove(stop.id, -1)} disabled={idx === 0} style={{ color: '#C4CCC8' }} className="disabled:opacity-30 p-1 -m-1 active:scale-90 transition-transform">
                     <ChevronUp size={14} />
                   </button>
@@ -796,11 +796,17 @@ function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove,
                   <TextField value={stop.city} onChange={(v) => onEdit(stop.id, { city: v })}
                     onCommit={(oldV, newV) => onLogCityChange(stop.city, oldV, newV)}
                     className="w-full text-sm font-medium outline-none bg-transparent" style={{ color: INK }} />
-                  {sc && <div className="text-[11px]" style={{ color: '#96A19C' }}>{fmtDate(sc.start)} – {fmtDate(sc.end)}</div>}
                 </div>
 
+                <button onClick={() => setConfirmStop(stop)} style={{ color: '#C4CCC8' }} className="hover:!text-red-500 shrink-0 p-1.5 -m-1.5 active:scale-90 transition-transform">
+                  <Trash2 size={15} />
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2 mt-1.5 pl-1">
+                {sc && <span className="text-[11px] shrink-0" style={{ color: '#96A19C' }}>{fmtDate(sc.start)} – {fmtDate(sc.end)}</span>}
                 <select value={stop.phase} onChange={(e) => { onEdit(stop.id, { phase: e.target.value }); onLogPhaseChange(stop.city, e.target.value); }}
-                  className="text-xs rounded-full px-2 py-1 outline-none"
+                  className="text-[11px] rounded-full px-1.5 py-0.5 outline-none ml-auto shrink-0"
                   style={{ background: PHASE_COLOR[stop.phase].bg, color: PHASE_COLOR[stop.phase].text, border: `1px solid ${PHASE_COLOR[stop.phase].border}` }}
                 >
                   <option value="ferias">Férias</option>
@@ -809,16 +815,12 @@ function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove,
 
                 <NumberField min={0} value={stop.days} onChange={(n) => onEdit(stop.id, { days: n })}
                   onCommit={(oldV, newV) => onLogDaysChange(stop.city, oldV, newV)}
-                  className="w-14 text-sm text-center rounded-lg py-1 outline-none" style={{ border: `1px solid ${LINE}` }} />
-                <span className="text-xs w-8" style={{ color: '#96A19C' }}>dias</span>
-
-                <button onClick={() => setConfirmStop(stop)} style={{ color: '#C4CCC8' }} className="hover:!text-red-500 shrink-0 p-1.5 -m-1.5 active:scale-90 transition-transform">
-                  <Trash2 size={15} />
-                </button>
+                  className="w-10 text-xs text-center rounded-lg py-0.5 outline-none shrink-0" style={{ border: `1px solid ${LINE}` }} />
+                <span className="text-[11px] shrink-0" style={{ color: '#96A19C' }}>dias</span>
               </div>
 
               {pickerOpen && (
-                <div className="flex items-center gap-2 flex-wrap px-3 pb-3">
+                <div className="flex items-center gap-2 flex-wrap mt-2">
                   {CITY_PALETTE.map((palette, i) => (
                     <button key={i} onClick={() => { onSetCityColor(stop.city, i); setColorPickerId(null); }}
                       className="w-6 h-6 rounded-full active:scale-90 transition-transform"
@@ -1015,8 +1017,21 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
   const myRating = item.ratings?.[myName];
   const [comment, setComment] = useState(myRating?.comment || '');
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmRemoveBudget, setConfirmRemoveBudget] = useState(false);
+  const [choosingPayer, setChoosingPayer] = useState(false);
   const split = item.splitWith || [];
   const guests = split.length;
+
+  function addToBudget(payer) {
+    onEdit(item.id, { addedToBudget: true, paidBy: payer });
+    onLog(`adicionou a ${kindLabel} "${item.name}" às despesas (pago por ${payer})`);
+    setChoosingPayer(false);
+  }
+  function removeFromBudget() {
+    onEdit(item.id, { addedToBudget: false, paidBy: null });
+    onLog(`removeu a ${kindLabel} "${item.name}" das despesas`);
+    setConfirmRemoveBudget(false);
+  }
 
   function toggleGuest(name) {
     const has = split.includes(name);
@@ -1038,7 +1053,13 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
             onCommit={(oldV, newV) => onLog(`renomeou a ${kindLabel} "${oldV}" para "${newV}"`)}
             className="w-full text-sm font-medium outline-none bg-transparent" style={{ color: INK }} />
           <div className="flex items-center gap-2">
-            <LinkIcon size={12} className="shrink-0" style={{ color: '#C4CCC8' }} />
+            {item.link ? (
+              <a href={item.link} target="_blank" rel="noopener noreferrer" title="Abrir anúncio" className="shrink-0 active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
+                <LinkIcon size={12} />
+              </a>
+            ) : (
+              <LinkIcon size={12} className="shrink-0" style={{ color: '#C4CCC8' }} />
+            )}
             <input value={item.link} onChange={(e) => onEdit(item.id, { link: e.target.value })}
               placeholder="link (Airbnb, Booking, GetYourGuide...)" className="flex-1 text-xs outline-none bg-transparent" style={{ color: '#7A867F' }} />
           </div>
@@ -1100,6 +1121,36 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
               </div>
             </div>
           )}
+
+          {item.addedToBudget ? (
+            <div className="flex items-center justify-between gap-2 text-xs rounded-lg px-2.5 py-1.5 mt-1.5" style={{ background: JADE_TINT, color: JADE_DARK }}>
+              <span>Nas despesas · pago por {item.paidBy}</span>
+              <button onClick={() => setConfirmRemoveBudget(true)} className="font-medium underline active:opacity-60 transition-opacity shrink-0">
+                Remover
+              </button>
+            </div>
+          ) : choosingPayer ? (
+            <div className="rounded-lg p-2.5 mt-1.5" style={{ background: SAND }}>
+              <div className="text-xs mb-1.5" style={{ color: '#7A867F' }}>Quem pagou?</div>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {members.map((m) => (
+                  <button key={m} onClick={() => addToBudget(m)}
+                    className="px-2 py-0.5 rounded-full text-xs active:scale-95 transition-transform"
+                    style={{ border: `1px solid ${LINE}`, color: '#4A5651', background: 'white' }}
+                  >
+                    {m}
+                  </button>
+                ))}
+                <button onClick={() => setChoosingPayer(false)} className="text-xs active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setChoosingPayer(true)} className="flex items-center gap-1 text-xs font-medium mt-1.5 active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
+              <Wallet size={12} /> Adicionar às despesas
+            </button>
+          )}
         </div>
         {avg && (
           <div className="flex items-center gap-1 text-xs font-medium rounded-full px-2 py-1 shrink-0" style={{ background: '#FBF2E1', color: GOLD }}>
@@ -1117,6 +1168,14 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
         message={`Isso vai remover "${item.name}" e seu valor não vai mais contar no orçamento.`}
         onCancel={() => setConfirmOpen(false)}
         onConfirm={() => { onRemove(item.id); setConfirmOpen(false); }}
+      />
+
+      <ConfirmDialog
+        open={confirmRemoveBudget}
+        title="Remover das despesas?"
+        message={`"${item.name}" vai parar de contar no orçamento do grupo.`}
+        onCancel={() => setConfirmRemoveBudget(false)}
+        onConfirm={removeFromBudget}
       />
 
       <div className="mt-3 pt-3" style={{ borderTop: `1px solid ${LINE}` }}>
@@ -1152,7 +1211,7 @@ function OrcamentoTab({ expenses, combinedExpenses, members, myName, balances, s
   const [confirmExpenseId, setConfirmExpenseId] = useState(null);
   const [personModal, setPersonModal] = useState(null);
   const schedule = useMemo(() => computeMonthlySchedule(combinedExpenses), [combinedExpenses]);
-  const autoItems = useMemo(() => combinedExpenses.filter((e) => !e.paidBy), [combinedExpenses]);
+  const autoItems = useMemo(() => combinedExpenses.filter((e) => e.id.startsWith('acc-') || e.id.startsWith('act-')), [combinedExpenses]);
   const confirmExpense = expenses.find((e) => e.id === confirmExpenseId);
 
   return (
@@ -1168,7 +1227,7 @@ function OrcamentoTab({ expenses, combinedExpenses, members, myName, balances, s
           <div className="space-y-1.5">
             {autoItems.map((e) => (
               <div key={e.id} className="flex items-center justify-between text-xs" style={{ color: '#4A5651' }}>
-                <span>{e.description}</span>
+                <span>{e.description}{e.paidBy ? ` · pago por ${e.paidBy}` : ''}</span>
                 <span className="font-medium">R$ {brl(e.amount)}</span>
               </div>
             ))}
@@ -1420,8 +1479,11 @@ function LogsTab({ changeLog }) {
 
 function MonthlySummary({ schedule }) {
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
   if (!schedule.length) return null;
+
+  const grandTotal = schedule.reduce((sum, m) => sum + m.total, 0);
 
   function buildShareText() {
     return schedule.map((m) => {
@@ -1443,33 +1505,46 @@ function MonthlySummary({ schedule }) {
 
   return (
     <div className="rounded-xl px-4 py-3 mb-4 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
-      <div className="flex items-center justify-between mb-2">
-        <div className="text-xs font-medium uppercase tracking-wide" style={{ color: '#8A968E' }}>Resumo mensal por pessoa</div>
-        <button onClick={handleCopy} className="flex items-center gap-1 text-xs font-medium active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
-          {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? 'Copiado' : 'Copiar'}
-        </button>
-      </div>
-      <div className="space-y-3">
-        {schedule.map((m) => (
-          <div key={m.key}>
-            <div className="text-xs font-medium mb-1 flex items-center justify-between" style={{ color: INK }}>
-              <span>{MONTHS_FULL_PT[m.month]} de {m.year}</span>
-              <span style={{ color: '#96A19C', fontWeight: 400 }}>total R$ {brl(m.total)}</span>
-            </div>
-            <div className="space-y-0.5">
-              {Object.entries(m.perPerson).map(([name, amt]) => (
-                <div key={name} className="flex items-center justify-between text-xs" style={{ color: '#4A5651' }}>
-                  <span>{name}</span>
-                  <span className="font-medium">R$ {brl(amt)}</span>
-                </div>
-              ))}
-            </div>
+      <button onClick={() => setExpanded((v) => !v)} className="w-full flex items-center justify-between text-left active:opacity-70 transition-opacity">
+        <div>
+          <div className="text-xs font-medium uppercase tracking-wide" style={{ color: '#8A968E' }}>Resumo mensal por pessoa</div>
+          <div className="text-xs mt-0.5" style={{ color: '#96A19C' }}>
+            {schedule.length} mês{schedule.length === 1 ? '' : 'es'} · total R$ {brl(grandTotal)}
           </div>
-        ))}
-      </div>
-      <p className="text-[11px] mt-3" style={{ color: '#96A19C' }}>
-        Baseado na data de compra e no número de parcelas de cada gasto — preencha "comprado em" nos gastos abaixo para aparecer aqui.
-      </p>
+        </div>
+        {expanded ? <ChevronUp size={16} className="shrink-0" style={{ color: '#96A19C' }} /> : <ChevronDown size={16} className="shrink-0" style={{ color: '#96A19C' }} />}
+      </button>
+
+      {expanded && (
+        <>
+          <div className="flex justify-end mt-3 mb-1">
+            <button onClick={handleCopy} className="flex items-center gap-1 text-xs font-medium active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
+              {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? 'Copiado' : 'Copiar'}
+            </button>
+          </div>
+          <div className="space-y-3">
+            {schedule.map((m) => (
+              <div key={m.key}>
+                <div className="text-xs font-medium mb-1 flex items-center justify-between" style={{ color: INK }}>
+                  <span>{MONTHS_FULL_PT[m.month]} de {m.year}</span>
+                  <span style={{ color: '#96A19C', fontWeight: 400 }}>total R$ {brl(m.total)}</span>
+                </div>
+                <div className="space-y-0.5">
+                  {Object.entries(m.perPerson).map(([name, amt]) => (
+                    <div key={name} className="flex items-center justify-between text-xs" style={{ color: '#4A5651' }}>
+                      <span>{name}</span>
+                      <span className="font-medium">R$ {brl(amt)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+          <p className="text-[11px] mt-3" style={{ color: '#96A19C' }}>
+            Baseado na data de compra e no número de parcelas de cada gasto — preencha "comprado em" nos gastos abaixo para aparecer aqui.
+          </p>
+        </>
+      )}
     </div>
   );
 }

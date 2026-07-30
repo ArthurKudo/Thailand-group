@@ -16,9 +16,11 @@ html, body {
   }
 }
 
-/* iOS Safari dá zoom automático ao focar inputs com font-size < 16px */
+/* iOS Safari dá zoom automático ao focar inputs com font-size < 16px.
+   Selects ficam de fora de propósito: são "toque pra escolher" (sem risco
+   do bug do zero preso ao digitar) e precisam ficar compactos no mobile. */
 @media (max-width: 640px) {
-  input, select, textarea {
+  input, textarea {
     font-size: 16px !important;
   }
 }
