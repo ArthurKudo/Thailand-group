@@ -541,6 +541,22 @@ export default function ThailandGroupPlanner() {
     ...activitiesToExpenses(activities, scheduled),
   ], [expenses, accommodations, activities, scheduled]);
 
+  const schedule = useMemo(() => computeMonthlySchedule(combinedExpenses), [combinedExpenses]);
+
+  const settledByPerson = useMemo(() => {
+    const settled = {};
+    Object.entries(paymentStatus).forEach(([key, record]) => {
+      if (!record?.paid) return;
+      const sep = key.indexOf('__');
+      const name = key.slice(0, sep);
+      const monthKey = key.slice(sep + 2);
+      const monthEntry = schedule.find((m) => m.key === monthKey);
+      const amount = monthEntry?.perPerson[name];
+      if (amount != null) settled[name] = (settled[name] || 0) + amount;
+    });
+    return settled;
+  }, [paymentStatus, schedule]);
+
   const balances = useMemo(() => {
     const bal = {};
     members.forEach((m) => (bal[m] = { paid: 0, owed: 0 }));
@@ -554,8 +570,12 @@ export default function ThailandGroupPlanner() {
       const share = split.length ? amount / split.length : 0;
       split.forEach((n) => { if (!bal[n]) bal[n] = { paid: 0, owed: 0 }; bal[n].owed += share; });
     });
+    Object.entries(settledByPerson).forEach(([name, settledAmount]) => {
+      if (!bal[name]) bal[name] = { paid: 0, owed: 0 };
+      bal[name].owed = Math.max(0, bal[name].owed - settledAmount);
+    });
     return bal;
-  }, [members, combinedExpenses]);
+  }, [members, combinedExpenses, settledByPerson]);
 
   const settlements = useMemo(() => {
     const nets = Object.entries(balances).map(([name, b]) => ({ name, net: b.paid - b.owed }));
@@ -678,7 +698,7 @@ export default function ThailandGroupPlanner() {
               myName={myName} members={members} accHandlers={accHandlers} actHandlers={actHandlers} cityColors={cityColors} onLog={logChange} />
           )}
           {tab === 'orcamento' && (
-            <OrcamentoTab expenses={expenses} combinedExpenses={combinedExpenses} members={members} myName={myName} balances={balances}
+            <OrcamentoTab expenses={expenses} combinedExpenses={combinedExpenses} schedule={schedule} members={members} myName={myName} balances={balances}
               settlements={settlements} totalSpent={totalSpent} onAdd={addExpense} onEdit={editExpense}
               onRemove={removeExpense} onToggleSplit={toggleSplit} onLog={logChange}
               paymentStatus={paymentStatus} onConfirmPayment={confirmPayment} onRemoveProof={removeProof}
@@ -1053,15 +1073,16 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
             onCommit={(oldV, newV) => onLog(`renomeou a ${kindLabel} "${oldV}" para "${newV}"`)}
             className="w-full text-sm font-medium outline-none bg-transparent" style={{ color: INK }} />
           <div className="flex items-center gap-2">
-            {item.link ? (
-              <a href={item.link} target="_blank" rel="noopener noreferrer" title="Abrir anúncio" className="shrink-0 active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
-                <LinkIcon size={12} />
-              </a>
-            ) : (
-              <LinkIcon size={12} className="shrink-0" style={{ color: '#C4CCC8' }} />
-            )}
+            <LinkIcon size={12} className="shrink-0" style={{ color: item.link ? JADE_DARK : '#C4CCC8' }} />
             <input value={item.link} onChange={(e) => onEdit(item.id, { link: e.target.value })}
               placeholder="link (Airbnb, Booking, GetYourGuide...)" className="flex-1 text-xs outline-none bg-transparent" style={{ color: '#7A867F' }} />
+            {item.link && (
+              <a href={item.link} target="_blank" rel="noopener noreferrer"
+                className="shrink-0 text-xs font-medium px-2.5 py-1.5 -my-1.5 rounded-full active:opacity-60 transition-opacity"
+                style={{ background: JADE_TINT, color: JADE_DARK }}>
+                Abrir
+              </a>
+            )}
           </div>
           {type === 'accommodation' ? (
             <div style={{ color: '#7A867F' }}>
@@ -1207,10 +1228,9 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
   );
 }
 
-function OrcamentoTab({ expenses, combinedExpenses, members, myName, balances, settlements, totalSpent, onAdd, onEdit, onRemove, onToggleSplit, onLog, paymentStatus, onConfirmPayment, onRemoveProof }) {
+function OrcamentoTab({ expenses, combinedExpenses, schedule, members, myName, balances, settlements, totalSpent, onAdd, onEdit, onRemove, onToggleSplit, onLog, paymentStatus, onConfirmPayment, onRemoveProof }) {
   const [confirmExpenseId, setConfirmExpenseId] = useState(null);
   const [personModal, setPersonModal] = useState(null);
-  const schedule = useMemo(() => computeMonthlySchedule(combinedExpenses), [combinedExpenses]);
   const autoItems = useMemo(() => combinedExpenses.filter((e) => e.id.startsWith('acc-') || e.id.startsWith('act-')), [combinedExpenses]);
   const confirmExpense = expenses.find((e) => e.id === confirmExpenseId);
 
