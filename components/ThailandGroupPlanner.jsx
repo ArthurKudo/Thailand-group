@@ -151,6 +151,8 @@ function accommodationsToExpenses(list, scheduled) {
     const totalPrice = item.totalPrice ?? ((Number(item.dailyRate) || 0) * (Number(item.nights) || 0));
     return {
       id: `acc-${item.id}`,
+      city: item.city,
+      kind: 'hospedagem',
       description: `Hospedagem: ${item.name} (${item.city})`,
       amount: Number(totalPrice) || 0,
       installments: 1,
@@ -167,6 +169,8 @@ function activitiesToExpenses(list, scheduled) {
     const total = (Number(item.pricePerPerson) || 0) * guests;
     return {
       id: `act-${item.id}`,
+      city: item.city,
+      kind: 'passeio',
       description: `Passeio: ${item.name} (${item.city})`,
       amount: total,
       installments: 1,
@@ -175,6 +179,57 @@ function activitiesToExpenses(list, scheduled) {
       purchaseDate: stop ? isoDateFromDate(stop.start) : null,
     };
   });
+}
+function computeBalances(expenseList, members) {
+  const bal = {};
+  members.forEach((m) => (bal[m] = { paid: 0, owed: 0 }));
+  expenseList.forEach((e) => {
+    const amount = Number(e.amount || 0);
+    const split = e.splitWith && e.splitWith.length ? e.splitWith : [];
+    if (e.paidBy) {
+      if (!bal[e.paidBy]) bal[e.paidBy] = { paid: 0, owed: 0 };
+      bal[e.paidBy].paid += amount;
+    }
+    const share = split.length ? amount / split.length : 0;
+    split.forEach((n) => { if (!bal[n]) bal[n] = { paid: 0, owed: 0 }; bal[n].owed += share; });
+  });
+  return bal;
+}
+function computeSettlements(balances) {
+  const nets = Object.entries(balances).map(([name, b]) => ({ name, net: b.paid - b.owed }));
+  const debtors = nets.filter((n) => n.net < -0.01).map((n) => ({ ...n, net: -n.net })).sort((a, b) => b.net - a.net);
+  const creditors = nets.filter((n) => n.net > 0.01).sort((a, b) => b.net - a.net);
+  const result = [];
+  let i = 0, j = 0;
+  while (i < debtors.length && j < creditors.length) {
+    const pay = Math.min(debtors[i].net, creditors[j].net);
+    result.push({ from: debtors[i].name, to: creditors[j].name, amount: pay });
+    debtors[i].net -= pay; creditors[j].net -= pay;
+    if (debtors[i].net < 0.01) i++;
+    if (creditors[j].net < 0.01) j++;
+  }
+  return result;
+}
+function getPaymentRecord(paymentStatus, domain, name, monthKey) {
+  const scopedKey = `${domain}__${name}__${monthKey}`;
+  if (paymentStatus[scopedKey]) return { key: scopedKey, record: paymentStatus[scopedKey] };
+  const legacyKey = `${name}__${monthKey}`;
+  if (paymentStatus[legacyKey]) return { key: legacyKey, record: paymentStatus[legacyKey] };
+  return { key: scopedKey, record: null };
+}
+function applySettledAmounts(balances, schedule, paymentStatus, domain) {
+  const next = {};
+  Object.entries(balances).forEach(([name, b]) => { next[name] = { ...b }; });
+  schedule.forEach((m) => {
+    Object.keys(m.perPerson).forEach((name) => {
+      const { record } = getPaymentRecord(paymentStatus, domain, name, m.key);
+      if (record?.paid) {
+        if (!next[name]) next[name] = { paid: 0, owed: 0 };
+        next[name].owed = Math.max(0, next[name].owed - m.perPerson[name]);
+      }
+    });
+  });
+  return next;
 }
 function monthPaymentStatus(year, month, paid) {
   if (paid) return 'paid';
@@ -386,15 +441,15 @@ export default function ThailandGroupPlanner() {
     return logChangeAs(myName, message);
   }
 
-  async function confirmPayment(name, monthKey, monthLabel, proofDataUrl) {
-    const key = `${name}__${monthKey}`;
+  async function confirmPayment(domain, name, monthKey, monthLabel, proofDataUrl) {
+    const key = `${domain}__${name}__${monthKey}`;
     const next = { ...paymentStatus, [key]: { paid: true, proof: proofDataUrl, confirmedBy: myName, confirmedAt: Date.now() } };
     setPaymentStatus(next);
     await saveShared('paymentStatus', next);
-    logChange(`anexou comprovante e marcou o pagamento de ${name} em ${monthLabel} como pago`);
+    logChange(`anexou comprovante e marcou o pagamento de ${name} em ${monthLabel} (${domain === 'viagem' ? 'viagem' : 'despesa geral'}) como pago`);
   }
-  async function removeProof(name, monthKey, monthLabel) {
-    const key = `${name}__${monthKey}`;
+  async function removeProof(domain, name, monthKey, monthLabel) {
+    const { key } = getPaymentRecord(paymentStatus, domain, name, monthKey);
     const next = { ...paymentStatus };
     delete next[key];
     setPaymentStatus(next);
@@ -535,65 +590,29 @@ export default function ThailandGroupPlanner() {
     logChange(has ? `removeu ${name} da divisão do gasto "${exp.description}"` : `incluiu ${name} na divisão do gasto "${exp.description}"`);
   }
 
-  const combinedExpenses = useMemo(() => [
-    ...expenses,
+  const destinoExpenses = useMemo(() => [
     ...accommodationsToExpenses(accommodations, scheduled),
     ...activitiesToExpenses(activities, scheduled),
-  ], [expenses, accommodations, activities, scheduled]);
+  ], [accommodations, activities, scheduled]);
 
-  const schedule = useMemo(() => computeMonthlySchedule(combinedExpenses), [combinedExpenses]);
+  const destinoSchedule = useMemo(() => computeMonthlySchedule(destinoExpenses), [destinoExpenses]);
+  const geralSchedule = useMemo(() => computeMonthlySchedule(expenses), [expenses]);
 
-  const settledByPerson = useMemo(() => {
-    const settled = {};
-    Object.entries(paymentStatus).forEach(([key, record]) => {
-      if (!record?.paid) return;
-      const sep = key.indexOf('__');
-      const name = key.slice(0, sep);
-      const monthKey = key.slice(sep + 2);
-      const monthEntry = schedule.find((m) => m.key === monthKey);
-      const amount = monthEntry?.perPerson[name];
-      if (amount != null) settled[name] = (settled[name] || 0) + amount;
-    });
-    return settled;
-  }, [paymentStatus, schedule]);
+  const destinoBalances = useMemo(() => {
+    const raw = computeBalances(destinoExpenses, members);
+    return applySettledAmounts(raw, destinoSchedule, paymentStatus, 'viagem');
+  }, [destinoExpenses, members, destinoSchedule, paymentStatus]);
 
-  const balances = useMemo(() => {
-    const bal = {};
-    members.forEach((m) => (bal[m] = { paid: 0, owed: 0 }));
-    combinedExpenses.forEach((e) => {
-      const amount = Number(e.amount || 0);
-      const split = e.splitWith && e.splitWith.length ? e.splitWith : [];
-      if (e.paidBy) {
-        if (!bal[e.paidBy]) bal[e.paidBy] = { paid: 0, owed: 0 };
-        bal[e.paidBy].paid += amount;
-      }
-      const share = split.length ? amount / split.length : 0;
-      split.forEach((n) => { if (!bal[n]) bal[n] = { paid: 0, owed: 0 }; bal[n].owed += share; });
-    });
-    Object.entries(settledByPerson).forEach(([name, settledAmount]) => {
-      if (!bal[name]) bal[name] = { paid: 0, owed: 0 };
-      bal[name].owed = Math.max(0, bal[name].owed - settledAmount);
-    });
-    return bal;
-  }, [members, combinedExpenses, settledByPerson]);
+  const geralBalances = useMemo(() => {
+    const raw = computeBalances(expenses, members);
+    return applySettledAmounts(raw, geralSchedule, paymentStatus, 'geral');
+  }, [expenses, members, geralSchedule, paymentStatus]);
 
-  const settlements = useMemo(() => {
-    const nets = Object.entries(balances).map(([name, b]) => ({ name, net: b.paid - b.owed }));
-    const debtors = nets.filter((n) => n.net < -0.01).map((n) => ({ ...n, net: -n.net })).sort((a, b) => b.net - a.net);
-    const creditors = nets.filter((n) => n.net > 0.01).sort((a, b) => b.net - a.net);
-    const result = [];
-    let i = 0, j = 0;
-    while (i < debtors.length && j < creditors.length) {
-      const pay = Math.min(debtors[i].net, creditors[j].net);
-      result.push({ from: debtors[i].name, to: creditors[j].name, amount: pay });
-      debtors[i].net -= pay; creditors[j].net -= pay;
-      if (debtors[i].net < 0.01) i++;
-      if (creditors[j].net < 0.01) j++;
-    }
-    return result;
-  }, [balances]);
+  const destinoSettlements = useMemo(() => computeSettlements(destinoBalances), [destinoBalances]);
+  const geralSettlements = useMemo(() => computeSettlements(geralBalances), [geralBalances]);
 
-  const totalSpent = useMemo(() => combinedExpenses.reduce((sum, e) => sum + Number(e.amount || 0), 0), [combinedExpenses]);
+  const destinoTotal = useMemo(() => destinoExpenses.reduce((sum, e) => sum + Number(e.amount || 0), 0), [destinoExpenses]);
+  const geralTotal = useMemo(() => expenses.reduce((sum, e) => sum + Number(e.amount || 0), 0), [expenses]);
 
   const fontStyle = { fontFamily: "'Fraunces', serif" };
 
@@ -698,8 +717,11 @@ export default function ThailandGroupPlanner() {
               myName={myName} members={members} accHandlers={accHandlers} actHandlers={actHandlers} cityColors={cityColors} onLog={logChange} />
           )}
           {tab === 'orcamento' && (
-            <OrcamentoTab expenses={expenses} combinedExpenses={combinedExpenses} schedule={schedule} members={members} myName={myName} balances={balances}
-              settlements={settlements} totalSpent={totalSpent} onAdd={addExpense} onEdit={editExpense}
+            <OrcamentoTab expenses={expenses} members={members} myName={myName} cityColors={cityColors}
+              destinoExpenses={destinoExpenses} destinoSchedule={destinoSchedule} destinoBalances={destinoBalances}
+              destinoSettlements={destinoSettlements} destinoTotal={destinoTotal}
+              geralSchedule={geralSchedule} geralBalances={geralBalances} geralSettlements={geralSettlements} geralTotal={geralTotal}
+              onAdd={addExpense} onEdit={editExpense}
               onRemove={removeExpense} onToggleSplit={toggleSplit} onLog={logChange}
               paymentStatus={paymentStatus} onConfirmPayment={confirmPayment} onRemoveProof={removeProof}
             />
@@ -1228,72 +1250,121 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
   );
 }
 
-function OrcamentoTab({ expenses, combinedExpenses, schedule, members, myName, balances, settlements, totalSpent, onAdd, onEdit, onRemove, onToggleSplit, onLog, paymentStatus, onConfirmPayment, onRemoveProof }) {
-  const [confirmExpenseId, setConfirmExpenseId] = useState(null);
-  const [personModal, setPersonModal] = useState(null);
-  const autoItems = useMemo(() => combinedExpenses.filter((e) => e.id.startsWith('acc-') || e.id.startsWith('act-')), [combinedExpenses]);
-  const confirmExpense = expenses.find((e) => e.id === confirmExpenseId);
+function OrcamentoTab({
+  expenses, members, myName, cityColors,
+  destinoExpenses, destinoSchedule, destinoBalances, destinoSettlements, destinoTotal,
+  geralSchedule, geralBalances, geralSettlements, geralTotal,
+  onAdd, onEdit, onRemove, onToggleSplit, onLog,
+  paymentStatus, onConfirmPayment, onRemoveProof,
+}) {
+  const [section, setSection] = useState('viagem');
+  const sections = [
+    { key: 'viagem', label: 'Viagem' },
+    { key: 'geral', label: 'Despesa Geral' },
+  ];
+
+  return (
+    <div>
+      <div className="inline-flex rounded-full p-1 mb-4" style={{ background: '#EEF2EF' }}>
+        {sections.map((s) => {
+          const active = section === s.key;
+          return (
+            <button key={s.key} onClick={() => setSection(s.key)}
+              className="text-xs px-3 py-1.5 rounded-full transition-colors"
+              style={{ background: active ? 'white' : 'transparent', color: active ? JADE_DARK : '#7A867F', fontWeight: active ? 500 : 400, boxShadow: active ? '0 1px 2px rgba(0,0,0,0.06)' : 'none' }}
+            >
+              {s.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {section === 'viagem' ? (
+        <ViagemSection
+          destinoExpenses={destinoExpenses} destinoTotal={destinoTotal} cityColors={cityColors}
+          balances={destinoBalances} settlements={destinoSettlements} schedule={destinoSchedule}
+          members={members} paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof}
+        />
+      ) : (
+        <GeralSection
+          expenses={expenses} totalSpent={geralTotal}
+          balances={geralBalances} settlements={geralSettlements} schedule={geralSchedule}
+          members={members} onAdd={onAdd} onEdit={onEdit} onRemove={onRemove} onToggleSplit={onToggleSplit} onLog={onLog}
+          paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof}
+        />
+      )}
+    </div>
+  );
+}
+
+function ViagemSection({ destinoExpenses, destinoTotal, cityColors, balances, settlements, schedule, members, paymentStatus, onConfirmPayment, onRemoveProof }) {
+  const byCity = useMemo(() => {
+    const map = {};
+    destinoExpenses.forEach((e) => {
+      if (!map[e.city]) map[e.city] = { hospedagem: 0, passeio: 0, total: 0 };
+      map[e.city][e.kind] += e.amount;
+      map[e.city].total += e.amount;
+    });
+    return map;
+  }, [destinoExpenses]);
+  const cities = Object.keys(byCity);
 
   return (
     <div>
       <div className="rounded-2xl px-4 py-3 mb-4 flex items-center justify-between" style={{ background: JADE_TINT, border: `1px solid #BFE3D5` }}>
-        <span className="text-sm" style={{ color: JADE_DARK }}>Total gasto pelo grupo</span>
-        <span className="text-lg font-medium" style={{ color: JADE_DARK, fontFamily: "'Fraunces', serif" }}>R$ {brl(totalSpent)}</span>
+        <span className="text-sm" style={{ color: JADE_DARK }}>Total em hospedagens e passeios</span>
+        <span className="text-lg font-medium" style={{ color: JADE_DARK, fontFamily: "'Fraunces', serif" }}>R$ {brl(destinoTotal)}</span>
       </div>
 
-      {autoItems.length > 0 && (
-        <div className="rounded-xl px-4 py-3 mb-4 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
-          <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: '#8A968E' }}>Hospedagens e passeios (de Destinos)</div>
-          <div className="space-y-1.5">
-            {autoItems.map((e) => (
-              <div key={e.id} className="flex items-center justify-between text-xs" style={{ color: '#4A5651' }}>
-                <span>{e.description}{e.paidBy ? ` · pago por ${e.paidBy}` : ''}</span>
-                <span className="font-medium">R$ {brl(e.amount)}</span>
-              </div>
-            ))}
-          </div>
-          <p className="text-[11px] mt-2" style={{ color: '#96A19C' }}>Editável na aba Destinos — já entra nos totais e no resumo abaixo.</p>
-        </div>
-      )}
-
-      <MonthlySummary schedule={schedule} />
-
-      {members.length > 0 && (
-        <div className="grid grid-cols-2 gap-2 mb-4">
-          {members.map((m) => {
-            const b = balances[m] || { paid: 0, owed: 0 };
-            const net = b.paid - b.owed;
+      {cities.length === 0 ? (
+        <p className="text-sm py-6 text-center" style={{ color: '#96A19C' }}>
+          Nenhuma hospedagem ou passeio nas despesas ainda. Vá em Destinos e clique em "Adicionar às despesas".
+        </p>
+      ) : (
+        <div className="space-y-2 mb-4">
+          {cities.map((city) => {
+            const totals = byCity[city];
+            const c = cityColors[city];
             return (
-              <button key={m} onClick={() => setPersonModal(m)}
-                className="text-left rounded-xl px-3 py-2.5 shadow-sm active:opacity-70 transition-opacity" style={{ background: 'white', border: `1px solid ${LINE}` }}>
-                <div className="text-xs" style={{ color: '#96A19C' }}>{m}</div>
-                <div className="text-sm font-medium" style={{ color: net >= 0 ? JADE_DARK : CORAL }}>
-                  {net >= 0 ? '+' : '-'}R$ {brl(Math.abs(net))}
+              <div key={city} className="rounded-xl px-3.5 py-3 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+                <div className="flex items-center gap-2 mb-1.5">
+                  {c && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c.text }} />}
+                  <span className="text-sm font-medium" style={{ color: INK }}>{city}</span>
+                  <span className="ml-auto text-sm font-medium" style={{ color: INK }}>R$ {brl(totals.total)}</span>
                 </div>
-                <div className="text-[11px]" style={{ color: '#96A19C' }}>pagou R$ {brl(b.paid)} · parte R$ {brl(b.owed)}</div>
-              </button>
+                <div className="flex items-center justify-between text-xs" style={{ color: '#7A867F' }}>
+                  <span>Hospedagem</span><span>R$ {brl(totals.hospedagem)}</span>
+                </div>
+                <div className="flex items-center justify-between text-xs" style={{ color: '#7A867F' }}>
+                  <span>Passeios</span><span>R$ {brl(totals.passeio)}</span>
+                </div>
+              </div>
             );
           })}
         </div>
       )}
 
-      {settlements.length > 0 && (
-        <div className="rounded-xl px-4 py-3 mb-5" style={{ background: '#F5F7F5', border: `1px solid ${LINE}` }}>
-          <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: '#8A968E' }}>Acertos sugeridos</div>
-          <div className="space-y-1.5">
-            {settlements.map((s, idx) => (
-              <div key={idx} className="text-sm flex items-center gap-1.5" style={{ color: '#4A5651' }}>
-                <span className="font-medium">{s.from}</span>
-                <ChevronRight size={13} style={{ color: '#B7C1BC' }} />
-                <span className="font-medium">{s.to}</span>
-                <span className="ml-auto" style={{ color: '#96A19C' }}>R$ {brl(s.amount)}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <BalancesPanel domain="viagem" balances={balances} settlements={settlements} schedule={schedule} members={members}
+        paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
+    </div>
+  );
+}
 
-      <div className="space-y-3">
+function GeralSection({ expenses, totalSpent, balances, settlements, schedule, members, onAdd, onEdit, onRemove, onToggleSplit, onLog, paymentStatus, onConfirmPayment, onRemoveProof }) {
+  const [confirmExpenseId, setConfirmExpenseId] = useState(null);
+  const confirmExpense = expenses.find((e) => e.id === confirmExpenseId);
+
+  return (
+    <div>
+      <div className="rounded-2xl px-4 py-3 mb-4 flex items-center justify-between" style={{ background: JADE_TINT, border: `1px solid #BFE3D5` }}>
+        <span className="text-sm" style={{ color: JADE_DARK }}>Total em despesas gerais</span>
+        <span className="text-lg font-medium" style={{ color: JADE_DARK, fontFamily: "'Fraunces', serif" }}>R$ {brl(totalSpent)}</span>
+      </div>
+
+      <BalancesPanel domain="geral" balances={balances} settlements={settlements} schedule={schedule} members={members}
+        paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
+
+      <div className="space-y-3 mt-1">
         {expenses.map((e) => {
           const installments = Math.max(1, Number(e.installments || 1));
           const perInstallment = Number(e.amount || 0) / installments;
@@ -1373,16 +1444,61 @@ function OrcamentoTab({ expenses, combinedExpenses, schedule, members, myName, b
         onCancel={() => setConfirmExpenseId(null)}
         onConfirm={() => { onRemove(confirmExpenseId); setConfirmExpenseId(null); }}
       />
-
-      {personModal && (
-        <PersonMonthlyModal name={personModal} schedule={schedule} onClose={() => setPersonModal(null)}
-          paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
-      )}
     </div>
   );
 }
 
-function PersonMonthlyModal({ name, schedule, onClose, paymentStatus, onConfirmPayment, onRemoveProof }) {
+function BalancesPanel({ domain, balances, settlements, schedule, members, paymentStatus, onConfirmPayment, onRemoveProof }) {
+  const [personModal, setPersonModal] = useState(null);
+
+  return (
+    <>
+      <MonthlySummary schedule={schedule} />
+
+      {members.length > 0 && (
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          {members.map((m) => {
+            const b = balances[m] || { paid: 0, owed: 0 };
+            const net = b.paid - b.owed;
+            return (
+              <button key={m} onClick={() => setPersonModal(m)}
+                className="text-left rounded-xl px-3 py-2.5 shadow-sm active:opacity-70 transition-opacity" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+                <div className="text-xs" style={{ color: '#96A19C' }}>{m}</div>
+                <div className="text-sm font-medium" style={{ color: net >= 0 ? JADE_DARK : CORAL }}>
+                  {net >= 0 ? '+' : '-'}R$ {brl(Math.abs(net))}
+                </div>
+                <div className="text-[11px]" style={{ color: '#96A19C' }}>pagou R$ {brl(b.paid)} · parte R$ {brl(b.owed)}</div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {settlements.length > 0 && (
+        <div className="rounded-xl px-4 py-3 mb-5" style={{ background: '#F5F7F5', border: `1px solid ${LINE}` }}>
+          <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: '#8A968E' }}>Acertos sugeridos</div>
+          <div className="space-y-1.5">
+            {settlements.map((s, idx) => (
+              <div key={idx} className="text-sm flex items-center gap-1.5" style={{ color: '#4A5651' }}>
+                <span className="font-medium">{s.from}</span>
+                <ChevronRight size={13} style={{ color: '#B7C1BC' }} />
+                <span className="font-medium">{s.to}</span>
+                <span className="ml-auto" style={{ color: '#96A19C' }}>R$ {brl(s.amount)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {personModal && (
+        <PersonMonthlyModal domain={domain} name={personModal} schedule={schedule} onClose={() => setPersonModal(null)}
+          paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
+      )}
+    </>
+  );
+}
+
+function PersonMonthlyModal({ domain, name, schedule, onClose, paymentStatus, onConfirmPayment, onRemoveProof }) {
   const rows = schedule.filter((m) => m.perPerson[name] != null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [confirmRemoveKey, setConfirmRemoveKey] = useState(null);
@@ -1395,7 +1511,7 @@ function PersonMonthlyModal({ name, schedule, onClose, paymentStatus, onConfirmP
     setUploadingKey(monthKey);
     try {
       const dataUrl = await readAndCompressImage(file);
-      await onConfirmPayment(name, monthKey, monthLabel, dataUrl);
+      await onConfirmPayment(domain, name, monthKey, monthLabel, dataUrl);
     } catch (err) {
       setUploadError('Não deu para processar essa imagem, tenta outra.');
     } finally {
@@ -1417,7 +1533,7 @@ function PersonMonthlyModal({ name, schedule, onClose, paymentStatus, onConfirmP
           <div className="space-y-2">
             {rows.map((m) => {
               const monthLabel = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
-              const record = paymentStatus[`${name}__${m.key}`];
+              const { record } = getPaymentRecord(paymentStatus, domain, name, m.key);
               const status = monthPaymentStatus(m.year, m.month, !!record?.paid);
               const sc = PAYMENT_STATUS_COLOR[status];
               return (
@@ -1468,7 +1584,7 @@ function PersonMonthlyModal({ name, schedule, onClose, paymentStatus, onConfirmP
         onConfirm={() => {
           const row = rows.find((r) => r.key === confirmRemoveKey);
           const monthLabel = row ? `${MONTHS_FULL_PT[row.month]} de ${row.year}` : confirmRemoveKey;
-          onRemoveProof(name, confirmRemoveKey, monthLabel);
+          onRemoveProof(domain, name, confirmRemoveKey, monthLabel);
           setConfirmRemoveKey(null);
         }}
       />
