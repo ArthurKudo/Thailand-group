@@ -155,10 +155,10 @@ function accommodationsToExpenses(list, scheduled) {
       kind: 'hospedagem',
       description: `Hospedagem: ${item.name} (${item.city})`,
       amount: Number(totalPrice) || 0,
-      installments: 1,
+      installments: Math.max(1, Number(item.installments) || 1),
       paidBy: item.paidBy || null,
       splitWith: item.splitWith || [],
-      purchaseDate: stop ? isoDateFromDate(stop.start) : null,
+      purchaseDate: item.purchaseDate || (stop ? isoDateFromDate(stop.start) : null),
     };
   });
 }
@@ -173,10 +173,10 @@ function activitiesToExpenses(list, scheduled) {
       kind: 'passeio',
       description: `Passeio: ${item.name} (${item.city})`,
       amount: total,
-      installments: 1,
+      installments: Math.max(1, Number(item.installments) || 1),
       paidBy: item.paidBy || null,
       splitWith: item.splitWith || [],
-      purchaseDate: stop ? isoDateFromDate(stop.start) : null,
+      purchaseDate: item.purchaseDate || (stop ? isoDateFromDate(stop.start) : null),
     };
   });
 }
@@ -1061,11 +1061,15 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmRemoveBudget, setConfirmRemoveBudget] = useState(false);
   const [choosingPayer, setChoosingPayer] = useState(false);
+  const [budgetDate, setBudgetDate] = useState(item.purchaseDate || '');
+  const [budgetInstallments, setBudgetInstallments] = useState(item.installments || 1);
   const split = item.splitWith || [];
   const guests = split.length;
 
   function addToBudget(payer) {
-    onEdit(item.id, { addedToBudget: true, paidBy: payer });
+    const patch = { addedToBudget: true, paidBy: payer, installments: Math.max(1, Number(budgetInstallments) || 1) };
+    if (budgetDate) patch.purchaseDate = budgetDate;
+    onEdit(item.id, patch);
     onLog(`adicionou a ${kindLabel} "${item.name}" às despesas (pago por ${payer})`);
     setChoosingPayer(false);
   }
@@ -1166,27 +1170,53 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
           )}
 
           {item.addedToBudget ? (
-            <div className="flex items-center justify-between gap-2 text-xs rounded-lg px-2.5 py-1.5 mt-1.5" style={{ background: JADE_TINT, color: JADE_DARK }}>
-              <span>Nas despesas · pago por {item.paidBy}</span>
-              <button onClick={() => setConfirmRemoveBudget(true)} className="font-medium underline active:opacity-60 transition-opacity shrink-0">
-                Remover
-              </button>
+            <div className="rounded-lg px-2.5 py-2 mt-1.5 space-y-1.5" style={{ background: JADE_TINT, color: JADE_DARK }}>
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <span>Nas despesas · pago por {item.paidBy}</span>
+                <button onClick={() => setConfirmRemoveBudget(true)} className="font-medium underline active:opacity-60 transition-opacity shrink-0">
+                  Remover
+                </button>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap text-xs">
+                <span>comprado em</span>
+                <input type="date" value={item.purchaseDate || ''}
+                  onChange={(e) => { onEdit(item.id, { purchaseDate: e.target.value }); onLog(`definiu a data de compra da ${kindLabel} "${item.name}" para ${e.target.value}`); }}
+                  className="rounded-md px-1.5 py-0.5 outline-none" style={{ border: '1px solid #BFE3D5', background: 'white', color: INK }} />
+                <span>em</span>
+                <NumberField min={1} value={item.installments || 1}
+                  onChange={(n) => onEdit(item.id, { installments: Math.max(1, n) })}
+                  onCommit={(oldV, newV) => onLog(`alterou as parcelas da ${kindLabel} "${item.name}" de ${oldV} para ${newV}`)}
+                  className="w-10 text-center rounded-md px-1 py-0.5 outline-none" style={{ border: '1px solid #BFE3D5', background: 'white', color: INK }} />
+                <span>parcela{(Number(item.installments) || 1) > 1 ? 's' : ''}</span>
+              </div>
             </div>
           ) : choosingPayer ? (
-            <div className="rounded-lg p-2.5 mt-1.5" style={{ background: SAND }}>
-              <div className="text-xs mb-1.5" style={{ color: '#7A867F' }}>Quem pagou?</div>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                {members.map((m) => (
-                  <button key={m} onClick={() => addToBudget(m)}
-                    className="px-2 py-0.5 rounded-full text-xs active:scale-95 transition-transform"
-                    style={{ border: `1px solid ${LINE}`, color: '#4A5651', background: 'white' }}
-                  >
-                    {m}
+            <div className="rounded-lg p-2.5 mt-1.5 space-y-2" style={{ background: SAND }}>
+              <div className="flex items-center gap-2 flex-wrap text-xs">
+                <span style={{ color: '#7A867F' }}>Comprado em</span>
+                <input type="date" value={budgetDate} onChange={(e) => setBudgetDate(e.target.value)}
+                  className="rounded-md px-1.5 py-0.5 outline-none" style={{ border: `1px solid ${LINE}`, background: 'white' }} />
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                <span style={{ color: '#7A867F' }}>Parcelas</span>
+                <NumberField min={1} value={budgetInstallments} onChange={setBudgetInstallments}
+                  className="w-12 text-center rounded-md px-1 py-0.5 outline-none" style={{ border: `1px solid ${LINE}`, background: 'white' }} />
+              </div>
+              <div>
+                <div className="text-xs mb-1.5" style={{ color: '#7A867F' }}>Quem pagou?</div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {members.map((m) => (
+                    <button key={m} onClick={() => addToBudget(m)}
+                      className="px-2 py-0.5 rounded-full text-xs active:scale-95 transition-transform"
+                      style={{ border: `1px solid ${LINE}`, color: '#4A5651', background: 'white' }}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                  <button onClick={() => setChoosingPayer(false)} className="text-xs active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
+                    Cancelar
                   </button>
-                ))}
-                <button onClick={() => setChoosingPayer(false)} className="text-xs active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
-                  Cancelar
-                </button>
+                </div>
               </div>
             </div>
           ) : (
@@ -1260,12 +1290,13 @@ function OrcamentoTab({
   const [section, setSection] = useState('viagem');
   const sections = [
     { key: 'viagem', label: 'Viagem' },
-    { key: 'geral', label: 'Despesa Geral' },
+    { key: 'geral', label: 'Outras' },
+    { key: 'total', label: 'Total' },
   ];
 
   return (
     <div>
-      <div className="inline-flex rounded-full p-1 mb-4" style={{ background: '#EEF2EF' }}>
+      <div className="inline-flex rounded-full p-1 mb-4 flex-wrap" style={{ background: '#EEF2EF' }}>
         {sections.map((s) => {
           const active = section === s.key;
           return (
@@ -1279,13 +1310,14 @@ function OrcamentoTab({
         })}
       </div>
 
-      {section === 'viagem' ? (
+      {section === 'viagem' && (
         <ViagemSection
           destinoExpenses={destinoExpenses} destinoTotal={destinoTotal} cityColors={cityColors}
           balances={destinoBalances} settlements={destinoSettlements} schedule={destinoSchedule}
           members={members} paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof}
         />
-      ) : (
+      )}
+      {section === 'geral' && (
         <GeralSection
           expenses={expenses} totalSpent={geralTotal}
           balances={geralBalances} settlements={geralSettlements} schedule={geralSchedule}
@@ -1293,6 +1325,80 @@ function OrcamentoTab({
           paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof}
         />
       )}
+      {section === 'total' && (
+        <TotalSection
+          destinoTotal={destinoTotal} geralTotal={geralTotal}
+          destinoBalances={destinoBalances} geralBalances={geralBalances} members={members}
+        />
+      )}
+    </div>
+  );
+}
+
+function TotalSection({ destinoTotal, geralTotal, destinoBalances, geralBalances, members }) {
+  const grandTotal = destinoTotal + geralTotal;
+  const balances = useMemo(() => {
+    const merged = {};
+    members.forEach((m) => { merged[m] = { paid: 0, owed: 0 }; });
+    [destinoBalances, geralBalances].forEach((bal) => {
+      Object.entries(bal).forEach(([name, v]) => {
+        if (!merged[name]) merged[name] = { paid: 0, owed: 0 };
+        merged[name].paid += v.paid;
+        merged[name].owed += v.owed;
+      });
+    });
+    return merged;
+  }, [destinoBalances, geralBalances, members]);
+  const settlements = useMemo(() => computeSettlements(balances), [balances]);
+
+  return (
+    <div>
+      <div className="rounded-2xl px-4 py-3 mb-2 flex items-center justify-between" style={{ background: JADE_TINT, border: `1px solid #BFE3D5` }}>
+        <span className="text-sm" style={{ color: JADE_DARK }}>Total geral do grupo</span>
+        <span className="text-lg font-medium" style={{ color: JADE_DARK, fontFamily: "'Fraunces', serif" }}>R$ {brl(grandTotal)}</span>
+      </div>
+      <div className="flex items-center justify-between text-xs mb-4 px-1" style={{ color: '#96A19C' }}>
+        <span>Viagem: R$ {brl(destinoTotal)}</span>
+        <span>Outras: R$ {brl(geralTotal)}</span>
+      </div>
+
+      {members.length > 0 && (
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          {members.map((m) => {
+            const b = balances[m] || { paid: 0, owed: 0 };
+            const net = b.paid - b.owed;
+            return (
+              <div key={m} className="rounded-xl px-3 py-2.5 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+                <div className="text-xs" style={{ color: '#96A19C' }}>{m}</div>
+                <div className="text-sm font-medium" style={{ color: net >= 0 ? JADE_DARK : CORAL }}>
+                  {net >= 0 ? '+' : '-'}R$ {brl(Math.abs(net))}
+                </div>
+                <div className="text-[11px]" style={{ color: '#96A19C' }}>pagou R$ {brl(b.paid)} · parte R$ {brl(b.owed)}</div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {settlements.length > 0 && (
+        <div className="rounded-xl px-4 py-3 mb-5" style={{ background: '#F5F7F5', border: `1px solid ${LINE}` }}>
+          <div className="text-xs font-medium uppercase tracking-wide mb-2" style={{ color: '#8A968E' }}>Acertos sugeridos (geral)</div>
+          <div className="space-y-1.5">
+            {settlements.map((s, idx) => (
+              <div key={idx} className="text-sm flex items-center gap-1.5" style={{ color: '#4A5651' }}>
+                <span className="font-medium">{s.from}</span>
+                <ChevronRight size={13} style={{ color: '#B7C1BC' }} />
+                <span className="font-medium">{s.to}</span>
+                <span className="ml-auto" style={{ color: '#96A19C' }}>R$ {brl(s.amount)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <p className="text-[11px] px-1" style={{ color: '#96A19C' }}>
+        Visão geral só pra conferência — edite os valores em Viagem ou Outras.
+      </p>
     </div>
   );
 }
