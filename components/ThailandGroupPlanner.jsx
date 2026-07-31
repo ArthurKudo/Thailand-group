@@ -714,7 +714,8 @@ export default function ThailandGroupPlanner() {
           )}
           {tab === 'destinos' && (
             <DestinosTab itinerary={itinerary} accommodations={accommodations} activities={activities}
-              myName={myName} members={members} accHandlers={accHandlers} actHandlers={actHandlers} cityColors={cityColors} onLog={logChange} />
+              myName={myName} members={members} accHandlers={accHandlers} actHandlers={actHandlers} cityColors={cityColors} onLog={logChange}
+              onEditStop={editStop} />
           )}
           {tab === 'orcamento' && (
             <OrcamentoTab expenses={expenses} members={members} myName={myName} cityColors={cityColors}
@@ -976,22 +977,27 @@ function MonthGrid({ year, month, scheduled, cityColors }) {
   );
 }
 
-function cityCostSummary(city, accommodations, activities) {
+function cityCostSummary(stop, accommodations, activities, membersCount) {
+  const city = stop?.city;
   const accs = accommodations.filter((i) => i.city === city);
   const acts = activities.filter((i) => i.city === city);
   const accTotal = accs.reduce((sum, i) => sum + (Number(i.totalPrice ?? ((Number(i.dailyRate) || 0) * (Number(i.nights) || 0))) || 0), 0);
   const actTotal = acts.reduce((sum, i) => sum + (Number(i.pricePerPerson) || 0) * (i.splitWith?.length || 0), 0);
-  return { accCount: accs.length, actCount: acts.length, accTotal, actTotal, total: accTotal + actTotal };
+  const foodTotal = (Number(stop?.foodPerDay) || 0) * (Number(stop?.days) || 0) * membersCount;
+  const total = accTotal + actTotal + foodTotal;
+  const perPerson = membersCount > 0 ? total / membersCount : total;
+  return { accCount: accs.length, actCount: acts.length, accTotal, actTotal, foodTotal, total, perPerson };
 }
 
-function DestinosTab({ itinerary, accommodations, activities, myName, members, accHandlers, actHandlers, cityColors, onLog }) {
+function DestinosTab({ itinerary, accommodations, activities, myName, members, accHandlers, actHandlers, cityColors, onLog, onEditStop }) {
   const [selected, setSelected] = useState(null);
+  const membersCount = members.length || 1;
 
   if (!selected) {
     return (
       <div className="space-y-2">
         {itinerary.map((stop) => {
-          const summary = cityCostSummary(stop.city, accommodations, activities);
+          const summary = cityCostSummary(stop, accommodations, activities, membersCount);
           const c = cityColors[stop.city];
           return (
             <button key={stop.id} onClick={() => setSelected(stop.city)}
@@ -1010,6 +1016,7 @@ function DestinosTab({ itinerary, accommodations, activities, myName, members, a
               </div>
               <div className="text-right shrink-0">
                 <div className="text-sm font-medium" style={{ color: INK }}>R$ {brl(summary.total)}</div>
+                <div className="text-[11px]" style={{ color: '#96A19C' }}>R$ {brl(summary.perPerson)}/pessoa</div>
               </div>
               <ChevronRight size={16} style={{ color: '#C4CCC8' }} />
             </button>
@@ -1020,7 +1027,7 @@ function DestinosTab({ itinerary, accommodations, activities, myName, members, a
   }
 
   const selectedStop = itinerary.find((s) => s.city === selected);
-  const summary = cityCostSummary(selected, accommodations, activities);
+  const summary = cityCostSummary(selectedStop, accommodations, activities, membersCount);
 
   return (
     <div>
@@ -1034,9 +1041,22 @@ function DestinosTab({ itinerary, accommodations, activities, myName, members, a
           <span className="text-sm" style={{ color: JADE_DARK }}>Total em {selected}</span>
           <span className="text-lg font-medium" style={{ color: JADE_DARK, fontFamily: "'Fraunces', serif" }}>R$ {brl(summary.total)}</span>
         </div>
-        <div className="flex items-center justify-between text-xs" style={{ color: '#4A8A73' }}>
+        <div className="flex items-center justify-between text-xs mb-2" style={{ color: '#4A8A73' }}>
           <span>Hospedagem: R$ {brl(summary.accTotal)}</span>
           <span>Passeios: R$ {brl(summary.actTotal)}</span>
+          <span>Alimentação: R$ {brl(summary.foodTotal)}</span>
+        </div>
+        <div className="flex items-center justify-between text-xs pt-2" style={{ color: JADE_DARK, borderTop: '1px solid #BFE3D5' }}>
+          <span>Por pessoa (total)</span>
+          <span className="font-medium">R$ {brl(summary.perPerson)}</span>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap text-xs mt-2.5 pt-2.5" style={{ borderTop: '1px solid #BFE3D5', color: JADE_DARK }}>
+          <span>Alimentação por pessoa/dia</span>
+          <span>R$</span>
+          <NumberField min={0} value={selectedStop?.foodPerDay || 0}
+            onChange={(n) => onEditStop(selectedStop.id, { foodPerDay: n })}
+            onCommit={(oldV, newV) => onLog(`alterou o custo de alimentação por dia em "${selected}" de R$ ${brl(oldV)} para R$ ${brl(newV)}`)}
+            className="w-20 text-center rounded-md px-1.5 py-0.5 outline-none" style={{ border: '1px solid #BFE3D5', background: 'white', color: INK }} />
         </div>
       </div>
 
