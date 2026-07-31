@@ -976,18 +976,22 @@ function MonthGrid({ year, month, scheduled, cityColors }) {
   );
 }
 
+function cityCostSummary(city, accommodations, activities) {
+  const accs = accommodations.filter((i) => i.city === city);
+  const acts = activities.filter((i) => i.city === city);
+  const accTotal = accs.reduce((sum, i) => sum + (Number(i.totalPrice ?? ((Number(i.dailyRate) || 0) * (Number(i.nights) || 0))) || 0), 0);
+  const actTotal = acts.reduce((sum, i) => sum + (Number(i.pricePerPerson) || 0) * (i.splitWith?.length || 0), 0);
+  return { accCount: accs.length, actCount: acts.length, accTotal, actTotal, total: accTotal + actTotal };
+}
+
 function DestinosTab({ itinerary, accommodations, activities, myName, members, accHandlers, actHandlers, cityColors, onLog }) {
   const [selected, setSelected] = useState(null);
-  const countFor = (city) => ({
-    acc: accommodations.filter((i) => i.city === city).length,
-    act: activities.filter((i) => i.city === city).length,
-  });
 
   if (!selected) {
     return (
       <div className="space-y-2">
         {itinerary.map((stop) => {
-          const counts = countFor(stop.city);
+          const summary = cityCostSummary(stop.city, accommodations, activities);
           const c = cityColors[stop.city];
           return (
             <button key={stop.id} onClick={() => setSelected(stop.city)}
@@ -998,8 +1002,14 @@ function DestinosTab({ itinerary, accommodations, activities, myName, members, a
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium" style={{ color: INK }}>{stop.city}</div>
                 <div className="text-xs mt-0.5" style={{ color: '#96A19C' }}>
-                  {stop.days} dias · {counts.acc} hospedage{counts.acc === 1 ? 'm' : 'ns'} · {counts.act} passeio{counts.act === 1 ? '' : 's'}
+                  {stop.days} dias · {summary.accCount} hospedage{summary.accCount === 1 ? 'm' : 'ns'} · {summary.actCount} passeio{summary.actCount === 1 ? '' : 's'}
                 </div>
+                <div className="text-xs mt-0.5" style={{ color: '#7A867F' }}>
+                  hospedagem R$ {brl(summary.accTotal)} · passeios R$ {brl(summary.actTotal)}
+                </div>
+              </div>
+              <div className="text-right shrink-0">
+                <div className="text-sm font-medium" style={{ color: INK }}>R$ {brl(summary.total)}</div>
               </div>
               <ChevronRight size={16} style={{ color: '#C4CCC8' }} />
             </button>
@@ -1010,13 +1020,25 @@ function DestinosTab({ itinerary, accommodations, activities, myName, members, a
   }
 
   const selectedStop = itinerary.find((s) => s.city === selected);
+  const summary = cityCostSummary(selected, accommodations, activities);
 
   return (
     <div>
       <button onClick={() => setSelected(null)} className="flex items-center gap-1 text-sm mb-4" style={{ color: '#7A867F' }}>
         <ChevronLeft size={15} /> Todos os destinos
       </button>
-      <h2 className="text-lg mb-4" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{selected}</h2>
+      <h2 className="text-lg mb-3" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{selected}</h2>
+
+      <div className="rounded-2xl px-4 py-3 mb-5" style={{ background: JADE_TINT, border: '1px solid #BFE3D5' }}>
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-sm" style={{ color: JADE_DARK }}>Total em {selected}</span>
+          <span className="text-lg font-medium" style={{ color: JADE_DARK, fontFamily: "'Fraunces', serif" }}>R$ {brl(summary.total)}</span>
+        </div>
+        <div className="flex items-center justify-between text-xs" style={{ color: '#4A8A73' }}>
+          <span>Hospedagem: R$ {brl(summary.accTotal)}</span>
+          <span>Passeios: R$ {brl(summary.actTotal)}</span>
+        </div>
+      </div>
 
       <CitySection title="Hospedagem" city={selected} type="accommodation" defaultNights={selectedStop?.days || 1}
         items={accommodations.filter((i) => i.city === selected)} myName={myName} members={members} onLog={onLog} {...accHandlers} />
