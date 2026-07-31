@@ -1328,15 +1328,33 @@ function OrcamentoTab({
       {section === 'total' && (
         <TotalSection
           destinoTotal={destinoTotal} geralTotal={geralTotal}
+          destinoSchedule={destinoSchedule} geralSchedule={geralSchedule}
           destinoBalances={destinoBalances} geralBalances={geralBalances} members={members}
+          paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof}
         />
       )}
     </div>
   );
 }
 
-function TotalSection({ destinoTotal, geralTotal, destinoBalances, geralBalances, members }) {
+function mergeSchedules(a, b) {
+  const map = {};
+  [...a, ...b].forEach((m) => {
+    if (!map[m.key]) map[m.key] = { key: m.key, year: m.year, month: m.month, perPerson: {}, total: 0 };
+    map[m.key].total += m.total;
+    Object.entries(m.perPerson).forEach(([name, amt]) => {
+      map[m.key].perPerson[name] = (map[m.key].perPerson[name] || 0) + amt;
+    });
+  });
+  return Object.values(map).sort((x, y) => x.key.localeCompare(y.key));
+}
+
+function TotalSection({
+  destinoTotal, geralTotal, destinoSchedule, geralSchedule, destinoBalances, geralBalances, members,
+  paymentStatus, onConfirmPayment, onRemoveProof,
+}) {
   const grandTotal = destinoTotal + geralTotal;
+  const [personModal, setPersonModal] = useState(null);
   const balances = useMemo(() => {
     const merged = {};
     members.forEach((m) => { merged[m] = { paid: 0, owed: 0 }; });
@@ -1350,6 +1368,7 @@ function TotalSection({ destinoTotal, geralTotal, destinoBalances, geralBalances
     return merged;
   }, [destinoBalances, geralBalances, members]);
   const settlements = useMemo(() => computeSettlements(balances), [balances]);
+  const mergedSchedule = useMemo(() => mergeSchedules(destinoSchedule, geralSchedule), [destinoSchedule, geralSchedule]);
 
   return (
     <div>
@@ -1362,19 +1381,22 @@ function TotalSection({ destinoTotal, geralTotal, destinoBalances, geralBalances
         <span>Outras: R$ {brl(geralTotal)}</span>
       </div>
 
+      <MonthlySummary schedule={mergedSchedule} />
+
       {members.length > 0 && (
         <div className="grid grid-cols-2 gap-2 mb-4">
           {members.map((m) => {
             const b = balances[m] || { paid: 0, owed: 0 };
             const net = b.paid - b.owed;
             return (
-              <div key={m} className="rounded-xl px-3 py-2.5 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+              <button key={m} onClick={() => setPersonModal(m)}
+                className="text-left rounded-xl px-3 py-2.5 shadow-sm active:opacity-70 transition-opacity" style={{ background: 'white', border: `1px solid ${LINE}` }}>
                 <div className="text-xs" style={{ color: '#96A19C' }}>{m}</div>
                 <div className="text-sm font-medium" style={{ color: net >= 0 ? JADE_DARK : CORAL }}>
                   {net >= 0 ? '+' : '-'}R$ {brl(Math.abs(net))}
                 </div>
                 <div className="text-[11px]" style={{ color: '#96A19C' }}>pagou R$ {brl(b.paid)} · parte R$ {brl(b.owed)}</div>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -1399,6 +1421,111 @@ function TotalSection({ destinoTotal, geralTotal, destinoBalances, geralBalances
       <p className="text-[11px] px-1" style={{ color: '#96A19C' }}>
         Visão geral só pra conferência — edite os valores em Viagem ou Outras.
       </p>
+
+      {personModal && (
+        <TotalPersonMonthlyModal name={personModal} destinoSchedule={destinoSchedule} geralSchedule={geralSchedule}
+          onClose={() => setPersonModal(null)} paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
+      )}
+    </div>
+  );
+}
+
+function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, onClose, paymentStatus, onConfirmPayment, onRemoveProof }) {
+  const rows = useMemo(() => {
+    const viagemRows = destinoSchedule.filter((m) => m.perPerson[name] != null).map((m) => ({ ...m, domain: 'viagem', domainLabel: 'Viagem' }));
+    const geralRows = geralSchedule.filter((m) => m.perPerson[name] != null).map((m) => ({ ...m, domain: 'geral', domainLabel: 'Outras' }));
+    return [...viagemRows, ...geralRows].sort((a, b) => a.key.localeCompare(b.key) || a.domain.localeCompare(b.domain));
+  }, [destinoSchedule, geralSchedule, name]);
+
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [confirmRemove, setConfirmRemove] = useState(null);
+  const [uploadingKey, setUploadingKey] = useState(null);
+  const [uploadError, setUploadError] = useState(null);
+
+  async function handleFile(domain, monthKey, monthLabel, file) {
+    if (!file) return;
+    setUploadError(null);
+    setUploadingKey(`${domain}__${monthKey}`);
+    try {
+      const dataUrl = await readAndCompressImage(file);
+      await onConfirmPayment(domain, name, monthKey, monthLabel, dataUrl);
+    } catch (err) {
+      setUploadError('Não deu para processar essa imagem, tenta outra.');
+    } finally {
+      setUploadingKey(null);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(28,42,39,0.45)' }} onClick={onClose}>
+      <div className="w-full max-w-sm rounded-2xl p-5 shadow-lg max-h-[80vh] overflow-y-auto" style={{ background: 'white' }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-base" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{name} · por mês</div>
+          <button onClick={onClose} style={{ color: '#C4CCC8' }} className="p-1 -m-1 active:scale-90 transition-transform"><X size={16} /></button>
+        </div>
+        {uploadError && <p className="text-xs mb-2" style={{ color: CORAL }}>{uploadError}</p>}
+        {rows.length === 0 ? (
+          <p className="text-xs" style={{ color: '#96A19C' }}>Nenhum valor com data definida ainda para {name}.</p>
+        ) : (
+          <div className="space-y-2">
+            {rows.map((m) => {
+              const monthLabel = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
+              const { record } = getPaymentRecord(paymentStatus, m.domain, name, m.key);
+              const status = monthPaymentStatus(m.year, m.month, !!record?.paid);
+              const sc = PAYMENT_STATUS_COLOR[status];
+              const rowKey = `${m.domain}__${m.key}`;
+              return (
+                <div key={rowKey} className="rounded-lg px-3 py-2" style={{ background: SAND }}>
+                  <div className="flex items-center justify-between text-sm">
+                    <span style={{ color: '#4A5651' }}>
+                      {monthLabel} <span className="text-[11px]" style={{ color: '#96A19C' }}>· {m.domainLabel}</span>
+                    </span>
+                    <span className="font-medium" style={{ color: INK }}>R$ {brl(m.perPerson[name])}</span>
+                  </div>
+                  <div className="flex items-center justify-between mt-1.5 gap-2">
+                    <span className="text-[11px] font-medium px-2 py-0.5 rounded-full shrink-0" style={{ background: sc.bg, color: sc.text }}>
+                      {PAYMENT_STATUS_LABEL[status]}
+                    </span>
+                    {record?.paid ? (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button onClick={() => setPreviewUrl(record.proof)} className="text-[11px] font-medium active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
+                          Ver comprovante
+                        </button>
+                        <button onClick={() => setConfirmRemove({ domain: m.domain, key: m.key, label: monthLabel })} className="text-[11px] active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
+                          Remover
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="text-[11px] font-medium active:opacity-60 transition-opacity shrink-0" style={{ color: JADE_DARK, cursor: uploadingKey === rowKey ? 'default' : 'pointer' }}>
+                        {uploadingKey === rowKey ? 'Enviando...' : 'Anexar comprovante'}
+                        <input type="file" accept="image/*" className="hidden" disabled={uploadingKey === rowKey}
+                          onChange={(e) => { handleFile(m.domain, m.key, monthLabel, e.target.files[0]); e.target.value = ''; }} />
+                      </label>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {previewUrl && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.75)' }} onClick={(e) => { e.stopPropagation(); setPreviewUrl(null); }}>
+          <img src={previewUrl} alt="Comprovante de pagamento" className="max-w-full max-h-full rounded-lg" />
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={!!confirmRemove}
+        title="Remover comprovante?"
+        message={confirmRemove ? `Isso vai desfazer a confirmação de pagamento de ${name} em ${confirmRemove.label}.` : ''}
+        onCancel={() => setConfirmRemove(null)}
+        onConfirm={() => {
+          onRemoveProof(confirmRemove.domain, name, confirmRemove.key, confirmRemove.label);
+          setConfirmRemove(null);
+        }}
+      />
     </div>
   );
 }
