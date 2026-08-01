@@ -446,7 +446,8 @@ export default function ThailandGroupPlanner() {
     const next = { ...paymentStatus, [key]: { paid: true, proof: proofDataUrl, confirmedBy: myName, confirmedAt: Date.now() } };
     setPaymentStatus(next);
     await saveShared('paymentStatus', next);
-    logChange(`anexou comprovante e marcou o pagamento de ${name} em ${monthLabel} (${domain === 'viagem' ? 'viagem' : 'despesa geral'}) como pago`);
+    const domainLabel = domain === 'viagem' ? 'viagem' : domain === 'geral' ? 'despesa geral' : 'total';
+    logChange(`anexou comprovante e marcou o pagamento de ${name} em ${monthLabel} (${domainLabel}) como pago`);
   }
   async function removeProof(domain, name, monthKey, monthLabel) {
     const { key } = getPaymentRecord(paymentStatus, domain, name, monthKey);
@@ -1466,13 +1467,14 @@ function TotalSection({
 
       {personModal && (
         <TotalPersonMonthlyModal name={personModal} destinoSchedule={destinoSchedule} geralSchedule={geralSchedule}
+          payTo={settlements.filter((s) => s.from === personModal)}
           onClose={() => setPersonModal(null)} paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
       )}
     </div>
   );
 }
 
-function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, onClose, paymentStatus, onConfirmPayment, onRemoveProof }) {
+function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, payTo, onClose, paymentStatus, onConfirmPayment, onRemoveProof }) {
   const months = useMemo(() => {
     const map = {};
     function addPart(schedule, domain, domainLabel) {
@@ -1494,13 +1496,13 @@ function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, onClose
   const [uploadingKey, setUploadingKey] = useState(null);
   const [uploadError, setUploadError] = useState(null);
 
-  async function handleFile(domain, monthKey, monthLabel, file) {
+  async function handleFile(monthKey, monthLabel, file) {
     if (!file) return;
     setUploadError(null);
-    setUploadingKey(`${domain}__${monthKey}`);
+    setUploadingKey(monthKey);
     try {
       const dataUrl = await readAndCompressImage(file);
-      await onConfirmPayment(domain, name, monthKey, monthLabel, dataUrl);
+      await onConfirmPayment('total', name, monthKey, monthLabel, dataUrl);
     } catch (err) {
       setUploadError('Não deu para processar essa imagem, tenta outra.');
     } finally {
@@ -1511,10 +1513,20 @@ function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, onClose
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(28,42,39,0.45)' }} onClick={onClose}>
       <div className="w-full max-w-sm rounded-2xl p-5 shadow-lg max-h-[80vh] overflow-y-auto" style={{ background: 'white' }} onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center justify-between mb-1">
           <div className="text-base" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{name} · por mês</div>
           <button onClick={onClose} style={{ color: '#C4CCC8' }} className="p-1 -m-1 active:scale-90 transition-transform"><X size={16} /></button>
         </div>
+        {payTo && payTo.length > 0 && (
+          <div className="text-xs mb-3" style={{ color: JADE_DARK }}>
+            Pagamento deve ser feito para{' '}
+            {payTo.map((s, idx) => (
+              <span key={s.to}>
+                <span className="font-medium">{s.to}</span> (R$ {brl(s.amount)}){idx < payTo.length - 1 ? ', ' : ''}
+              </span>
+            ))}
+          </div>
+        )}
         {uploadError && <p className="text-xs mb-2" style={{ color: CORAL }}>{uploadError}</p>}
         {months.length === 0 ? (
           <p className="text-xs" style={{ color: '#96A19C' }}>Nenhum valor com data definida ainda para {name}.</p>
@@ -1522,48 +1534,43 @@ function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, onClose
           <div className="space-y-2.5">
             {months.map((m) => {
               const monthLabel = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
+              const { record } = getPaymentRecord(paymentStatus, 'total', name, m.key);
+              const status = monthPaymentStatus(m.year, m.month, !!record?.paid);
+              const sc = PAYMENT_STATUS_COLOR[status];
               return (
                 <div key={m.key} className="rounded-lg px-3 py-2" style={{ background: SAND }}>
-                  <div className="flex items-center justify-between text-sm mb-1.5">
+                  <div className="flex items-center justify-between text-sm mb-1">
                     <span style={{ color: '#4A5651' }}>{monthLabel}</span>
                     <span className="font-medium" style={{ color: INK }}>R$ {brl(m.total)}</span>
                   </div>
-                  <div className="space-y-1.5">
-                    {m.parts.map((p) => {
-                      const { record } = getPaymentRecord(paymentStatus, p.domain, name, m.key);
-                      const status = monthPaymentStatus(m.year, m.month, !!record?.paid);
-                      const sc = PAYMENT_STATUS_COLOR[status];
-                      const rowKey = `${p.domain}__${m.key}`;
-                      return (
-                        <div key={rowKey} className="rounded-md px-2 py-1.5" style={{ background: 'white' }}>
-                          <div className="flex items-center justify-between text-xs mb-1">
-                            <span style={{ color: '#7A867F' }}>{p.domainLabel}</span>
-                            <span style={{ color: INK }}>R$ {brl(p.amount)}</span>
-                          </div>
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="text-[11px] font-medium px-2 py-0.5 rounded-full shrink-0" style={{ background: sc.bg, color: sc.text }}>
-                              {PAYMENT_STATUS_LABEL[status]}
-                            </span>
-                            {record?.paid ? (
-                              <div className="flex items-center gap-2 shrink-0">
-                                <button onClick={() => setPreviewUrl(record.proof)} className="text-[11px] font-medium active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
-                                  Ver comprovante
-                                </button>
-                                <button onClick={() => setConfirmRemove({ domain: p.domain, key: m.key, label: `${monthLabel} (${p.domainLabel})` })} className="text-[11px] active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
-                                  Remover
-                                </button>
-                              </div>
-                            ) : (
-                              <label className="text-[11px] font-medium active:opacity-60 transition-opacity shrink-0" style={{ color: JADE_DARK, cursor: uploadingKey === rowKey ? 'default' : 'pointer' }}>
-                                {uploadingKey === rowKey ? 'Enviando...' : 'Anexar comprovante'}
-                                <input type="file" accept="image/*" className="hidden" disabled={uploadingKey === rowKey}
-                                  onChange={(e) => { handleFile(p.domain, m.key, monthLabel, e.target.files[0]); e.target.value = ''; }} />
-                              </label>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+                  <div className="space-y-0.5 mb-1.5">
+                    {m.parts.map((p) => (
+                      <div key={p.domain} className="flex items-center justify-between text-[11px]" style={{ color: '#96A19C' }}>
+                        <span>{p.domainLabel}</span>
+                        <span>R$ {brl(p.amount)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[11px] font-medium px-2 py-0.5 rounded-full shrink-0" style={{ background: sc.bg, color: sc.text }}>
+                      {PAYMENT_STATUS_LABEL[status]}
+                    </span>
+                    {record?.paid ? (
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button onClick={() => setPreviewUrl(record.proof)} className="text-[11px] font-medium active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
+                          Ver comprovante
+                        </button>
+                        <button onClick={() => setConfirmRemove({ key: m.key, label: monthLabel })} className="text-[11px] active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
+                          Remover
+                        </button>
+                      </div>
+                    ) : (
+                      <label className="text-[11px] font-medium active:opacity-60 transition-opacity shrink-0" style={{ color: JADE_DARK, cursor: uploadingKey === m.key ? 'default' : 'pointer' }}>
+                        {uploadingKey === m.key ? 'Enviando...' : 'Anexar comprovante'}
+                        <input type="file" accept="image/*" className="hidden" disabled={uploadingKey === m.key}
+                          onChange={(e) => { handleFile(m.key, monthLabel, e.target.files[0]); e.target.value = ''; }} />
+                      </label>
+                    )}
                   </div>
                 </div>
               );
@@ -1584,7 +1591,7 @@ function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, onClose
         message={confirmRemove ? `Isso vai desfazer a confirmação de pagamento de ${name} em ${confirmRemove.label}.` : ''}
         onCancel={() => setConfirmRemove(null)}
         onConfirm={() => {
-          onRemoveProof(confirmRemove.domain, name, confirmRemove.key, confirmRemove.label);
+          onRemoveProof('total', name, confirmRemove.key, confirmRemove.label);
           setConfirmRemove(null);
         }}
       />
