@@ -1473,10 +1473,20 @@ function TotalSection({
 }
 
 function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, onClose, paymentStatus, onConfirmPayment, onRemoveProof }) {
-  const rows = useMemo(() => {
-    const viagemRows = destinoSchedule.filter((m) => m.perPerson[name] != null).map((m) => ({ ...m, domain: 'viagem', domainLabel: 'Viagem' }));
-    const geralRows = geralSchedule.filter((m) => m.perPerson[name] != null).map((m) => ({ ...m, domain: 'geral', domainLabel: 'Outras' }));
-    return [...viagemRows, ...geralRows].sort((a, b) => a.key.localeCompare(b.key) || a.domain.localeCompare(b.domain));
+  const months = useMemo(() => {
+    const map = {};
+    function addPart(schedule, domain, domainLabel) {
+      schedule.forEach((m) => {
+        const amount = m.perPerson[name];
+        if (amount == null) return;
+        if (!map[m.key]) map[m.key] = { key: m.key, year: m.year, month: m.month, total: 0, parts: [] };
+        map[m.key].total += amount;
+        map[m.key].parts.push({ domain, domainLabel, amount });
+      });
+    }
+    addPart(destinoSchedule, 'viagem', 'Viagem');
+    addPart(geralSchedule, 'geral', 'Outras');
+    return Object.values(map).sort((a, b) => a.key.localeCompare(b.key));
   }, [destinoSchedule, geralSchedule, name]);
 
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -1506,44 +1516,54 @@ function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, onClose
           <button onClick={onClose} style={{ color: '#C4CCC8' }} className="p-1 -m-1 active:scale-90 transition-transform"><X size={16} /></button>
         </div>
         {uploadError && <p className="text-xs mb-2" style={{ color: CORAL }}>{uploadError}</p>}
-        {rows.length === 0 ? (
+        {months.length === 0 ? (
           <p className="text-xs" style={{ color: '#96A19C' }}>Nenhum valor com data definida ainda para {name}.</p>
         ) : (
-          <div className="space-y-2">
-            {rows.map((m) => {
+          <div className="space-y-2.5">
+            {months.map((m) => {
               const monthLabel = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
-              const { record } = getPaymentRecord(paymentStatus, m.domain, name, m.key);
-              const status = monthPaymentStatus(m.year, m.month, !!record?.paid);
-              const sc = PAYMENT_STATUS_COLOR[status];
-              const rowKey = `${m.domain}__${m.key}`;
               return (
-                <div key={rowKey} className="rounded-lg px-3 py-2" style={{ background: SAND }}>
-                  <div className="flex items-center justify-between text-sm">
-                    <span style={{ color: '#4A5651' }}>
-                      {monthLabel} <span className="text-[11px]" style={{ color: '#96A19C' }}>· {m.domainLabel}</span>
-                    </span>
-                    <span className="font-medium" style={{ color: INK }}>R$ {brl(m.perPerson[name])}</span>
+                <div key={m.key} className="rounded-lg px-3 py-2" style={{ background: SAND }}>
+                  <div className="flex items-center justify-between text-sm mb-1.5">
+                    <span style={{ color: '#4A5651' }}>{monthLabel}</span>
+                    <span className="font-medium" style={{ color: INK }}>R$ {brl(m.total)}</span>
                   </div>
-                  <div className="flex items-center justify-between mt-1.5 gap-2">
-                    <span className="text-[11px] font-medium px-2 py-0.5 rounded-full shrink-0" style={{ background: sc.bg, color: sc.text }}>
-                      {PAYMENT_STATUS_LABEL[status]}
-                    </span>
-                    {record?.paid ? (
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button onClick={() => setPreviewUrl(record.proof)} className="text-[11px] font-medium active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
-                          Ver comprovante
-                        </button>
-                        <button onClick={() => setConfirmRemove({ domain: m.domain, key: m.key, label: monthLabel })} className="text-[11px] active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
-                          Remover
-                        </button>
-                      </div>
-                    ) : (
-                      <label className="text-[11px] font-medium active:opacity-60 transition-opacity shrink-0" style={{ color: JADE_DARK, cursor: uploadingKey === rowKey ? 'default' : 'pointer' }}>
-                        {uploadingKey === rowKey ? 'Enviando...' : 'Anexar comprovante'}
-                        <input type="file" accept="image/*" className="hidden" disabled={uploadingKey === rowKey}
-                          onChange={(e) => { handleFile(m.domain, m.key, monthLabel, e.target.files[0]); e.target.value = ''; }} />
-                      </label>
-                    )}
+                  <div className="space-y-1.5">
+                    {m.parts.map((p) => {
+                      const { record } = getPaymentRecord(paymentStatus, p.domain, name, m.key);
+                      const status = monthPaymentStatus(m.year, m.month, !!record?.paid);
+                      const sc = PAYMENT_STATUS_COLOR[status];
+                      const rowKey = `${p.domain}__${m.key}`;
+                      return (
+                        <div key={rowKey} className="rounded-md px-2 py-1.5" style={{ background: 'white' }}>
+                          <div className="flex items-center justify-between text-xs mb-1">
+                            <span style={{ color: '#7A867F' }}>{p.domainLabel}</span>
+                            <span style={{ color: INK }}>R$ {brl(p.amount)}</span>
+                          </div>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-medium px-2 py-0.5 rounded-full shrink-0" style={{ background: sc.bg, color: sc.text }}>
+                              {PAYMENT_STATUS_LABEL[status]}
+                            </span>
+                            {record?.paid ? (
+                              <div className="flex items-center gap-2 shrink-0">
+                                <button onClick={() => setPreviewUrl(record.proof)} className="text-[11px] font-medium active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
+                                  Ver comprovante
+                                </button>
+                                <button onClick={() => setConfirmRemove({ domain: p.domain, key: m.key, label: `${monthLabel} (${p.domainLabel})` })} className="text-[11px] active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
+                                  Remover
+                                </button>
+                              </div>
+                            ) : (
+                              <label className="text-[11px] font-medium active:opacity-60 transition-opacity shrink-0" style={{ color: JADE_DARK, cursor: uploadingKey === rowKey ? 'default' : 'pointer' }}>
+                                {uploadingKey === rowKey ? 'Enviando...' : 'Anexar comprovante'}
+                                <input type="file" accept="image/*" className="hidden" disabled={uploadingKey === rowKey}
+                                  onChange={(e) => { handleFile(p.domain, m.key, monthLabel, e.target.files[0]); e.target.value = ''; }} />
+                              </label>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               );
