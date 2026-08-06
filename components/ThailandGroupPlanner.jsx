@@ -714,7 +714,7 @@ export default function ThailandGroupPlanner() {
             />
           )}
           {tab === 'destinos' && (
-            <DestinosTab itinerary={itinerary} accommodations={accommodations} activities={activities}
+            <DestinosTab itinerary={itinerary} scheduled={scheduled} accommodations={accommodations} activities={activities}
               myName={myName} members={members} accHandlers={accHandlers} actHandlers={actHandlers} cityColors={cityColors} onLog={logChange}
               onEditStop={editStop} />
           )}
@@ -990,16 +990,17 @@ function cityCostSummary(stop, accommodations, activities, membersCount) {
   return { accCount: accs.length, actCount: acts.length, accTotal, actTotal, foodTotal, total, perPerson };
 }
 
-function DestinosTab({ itinerary, accommodations, activities, myName, members, accHandlers, actHandlers, cityColors, onLog, onEditStop }) {
+function DestinosTab({ itinerary, scheduled, accommodations, activities, myName, members, accHandlers, actHandlers, cityColors, onLog, onEditStop }) {
   const [selected, setSelected] = useState(null);
   const membersCount = members.length || 1;
 
   if (!selected) {
     return (
       <div className="space-y-2">
-        {itinerary.map((stop) => {
+        {itinerary.map((stop, idx) => {
           const summary = cityCostSummary(stop, accommodations, activities, membersCount);
           const c = cityColors[stop.city];
+          const sc = scheduled[idx];
           return (
             <button key={stop.id} onClick={() => setSelected(stop.city)}
               className="w-full flex items-center gap-3 rounded-xl px-4 py-3 shadow-sm transition-colors active:opacity-70 text-left"
@@ -1007,7 +1008,10 @@ function DestinosTab({ itinerary, accommodations, activities, myName, members, a
             >
               <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c.text }} />
               <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium" style={{ color: INK }}>{stop.city}</div>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium" style={{ color: INK }}>{stop.city}</span>
+                  {sc && <span className="text-[11px] shrink-0" style={{ color: '#96A19C' }}>{fmtDate(sc.start)} – {fmtDate(sc.end)}</span>}
+                </div>
                 <div className="text-xs mt-0.5" style={{ color: '#96A19C' }}>
                   {stop.days} dias · {summary.accCount} hospedage{summary.accCount === 1 ? 'm' : 'ns'} · {summary.actCount} passeio{summary.actCount === 1 ? '' : 's'}
                 </div>
@@ -1027,7 +1031,9 @@ function DestinosTab({ itinerary, accommodations, activities, myName, members, a
     );
   }
 
-  const selectedStop = itinerary.find((s) => s.city === selected);
+  const selectedIdx = itinerary.findIndex((s) => s.city === selected);
+  const selectedStop = itinerary[selectedIdx];
+  const selectedSc = scheduled[selectedIdx];
   const summary = cityCostSummary(selectedStop, accommodations, activities, membersCount);
 
   return (
@@ -1035,7 +1041,10 @@ function DestinosTab({ itinerary, accommodations, activities, myName, members, a
       <button onClick={() => setSelected(null)} className="flex items-center gap-1 text-sm mb-4" style={{ color: '#7A867F' }}>
         <ChevronLeft size={15} /> Todos os destinos
       </button>
-      <h2 className="text-lg mb-3" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{selected}</h2>
+      <div className="flex items-center gap-2 mb-3">
+        <h2 className="text-lg" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{selected}</h2>
+        {selectedSc && <span className="text-xs" style={{ color: '#96A19C' }}>{fmtDate(selectedSc.start)} – {fmtDate(selectedSc.end)}</span>}
+      </div>
 
       <div className="rounded-2xl px-4 py-3 mb-5" style={{ background: JADE_TINT, border: '1px solid #BFE3D5' }}>
         <div className="flex items-center justify-between mb-1">
