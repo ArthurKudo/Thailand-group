@@ -812,6 +812,7 @@ function RoteiroTab({ itinerary, scheduled, totalsByPhase, tripEnd, cityColors, 
 function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove, onAdd, onSetCityColor, onLogCityChange, onLogDaysChange, onLogPhaseChange }) {
   const [colorPickerId, setColorPickerId] = useState(null);
   const [confirmStop, setConfirmStop] = useState(null);
+  const [expandedId, setExpandedId] = useState(null);
 
   return (
     <div>
@@ -820,6 +821,7 @@ function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove,
           const sc = scheduled[idx];
           const c = cityColors[stop.city];
           const pickerOpen = colorPickerId === stop.id;
+          const expanded = expandedId === stop.id;
           return (
             <div key={stop.id} className="rounded-xl shadow-sm px-3 py-2.5" style={{ background: 'white', border: `1px solid ${LINE}` }}>
               <div className="flex items-center gap-2">
@@ -871,6 +873,39 @@ function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove,
                       style={{ background: palette.text, boxShadow: c === palette ? `0 0 0 2px white, 0 0 0 3.5px ${INK}` : 'none' }}
                     />
                   ))}
+                </div>
+              )}
+
+              <button onClick={() => setExpandedId(expanded ? null : stop.id)}
+                className="w-full flex items-center justify-center gap-1 text-[11px] font-medium mt-2 pt-2 active:opacity-60 transition-opacity"
+                style={{ color: JADE_DARK, borderTop: `1px solid ${LINE}` }}
+              >
+                {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                {expanded ? 'Ocultar atividades por dia' : 'Planejar atividades por dia'}
+              </button>
+
+              {expanded && (
+                <div className="mt-2 space-y-2">
+                  {Array.from({ length: Math.max(0, Number(stop.days) || 0) }).map((_, dayIdx) => {
+                    const date = sc ? addDays(sc.start, dayIdx) : null;
+                    const dateKey = date ? isoDateFromDate(date) : String(dayIdx);
+                    const dayNotes = stop.dayNotes || {};
+                    return (
+                      <div key={dateKey} className="rounded-lg px-2.5 py-2" style={{ background: SAND }}>
+                        <div className="text-[11px] font-medium mb-1" style={{ color: '#4A5651' }}>
+                          {date ? fmtDate(date) : `Dia ${dayIdx + 1}`}
+                        </div>
+                        <textarea
+                          value={dayNotes[dateKey] || ''}
+                          onChange={(e) => onEdit(stop.id, { dayNotes: { ...dayNotes, [dateKey]: e.target.value } })}
+                          placeholder="O que vamos fazer nesse dia..."
+                          rows={2}
+                          className="w-full text-xs rounded-md px-2 py-1.5 outline-none resize-none"
+                          style={{ border: `1px solid ${LINE}`, background: 'white', color: INK }}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               )}
             </div>
