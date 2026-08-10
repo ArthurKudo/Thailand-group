@@ -109,6 +109,20 @@ function monthsInRange(start, end) {
 function stopForDate(date, scheduled) {
   return scheduled.find((s) => date >= s.start && date <= s.end);
 }
+function stopsForDate(date, scheduled) {
+  return scheduled.filter((s) => date >= s.start && date <= s.end);
+}
+function uniqueDateCount(stops) {
+  const set = new Set();
+  stops.forEach((s) => {
+    let d = new Date(s.start);
+    while (d <= s.end) {
+      set.add(isoDateFromDate(d));
+      d = addDays(d, 1);
+    }
+  });
+  return set.size;
+}
 function buildCityColors(stops, overrides = {}) {
   const map = {};
   let i = 0;
@@ -521,14 +535,14 @@ export default function ThailandGroupPlanner() {
     return itinerary.map((s) => {
       const start = new Date(cursor);
       const end = addDays(start, Math.max(0, Number(s.days || 0) - 1));
-      cursor = addDays(end, 1);
+      cursor = new Date(end);
       return { ...s, start, end };
     });
   }, [itinerary]);
 
   const feriasStatus = useMemo(() => {
     const feriasStops = scheduled.filter((s) => s.phase === 'ferias');
-    const totalDays = feriasStops.reduce((sum, s) => sum + Number(s.days || 0), 0);
+    const totalDays = uniqueDateCount(feriasStops);
     const projectedEnd = feriasStops.length ? feriasStops[feriasStops.length - 1].end : TRIP_START;
     const budget = daysBetween(TRIP_START, FERIAS_DEADLINE) + 1;
     const diff = budget - totalDays;
@@ -538,10 +552,12 @@ export default function ThailandGroupPlanner() {
   const tripEnd = scheduled.length ? scheduled[scheduled.length - 1].end : TRIP_START;
 
   const totalsByPhase = useMemo(() => {
+    const byPhase = {};
+    scheduled.forEach((s) => { (byPhase[s.phase] = byPhase[s.phase] || []).push(s); });
     const totals = {};
-    itinerary.forEach((s) => { totals[s.phase] = (totals[s.phase] || 0) + Number(s.days || 0); });
+    Object.entries(byPhase).forEach(([phase, stops]) => { totals[phase] = uniqueDateCount(stops); });
     return totals;
-  }, [itinerary]);
+  }, [scheduled]);
 
   const cityColors = useMemo(() => buildCityColors(itinerary, cityColorOverrides), [itinerary, cityColorOverrides]);
   const memberCount = members.length || 1;
@@ -936,9 +952,13 @@ function CalendarioView({ scheduled, tripEnd, cityColors }) {
 
   return (
     <div>
-      <div className="flex items-center gap-1.5 mb-4 text-xs" style={{ color: '#7A867F' }}>
+      <div className="flex items-center gap-1.5 mb-1.5 text-xs" style={{ color: '#7A867F' }}>
         <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ border: `2px dashed ${CORAL}` }} />
         Contorno tracejado = prazo das férias (02 mar)
+      </div>
+      <div className="flex items-center gap-1.5 mb-4 text-xs" style={{ color: '#7A867F' }}>
+        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: `linear-gradient(135deg, ${JADE_TINT} 50%, ${SAND} 50%)`, border: `1px solid ${LINE}` }} />
+        Dia dividido = saída de uma cidade e chegada na outra
       </div>
 
       <div className="space-y-6">
@@ -982,23 +1002,30 @@ function MonthGrid({ year, month, scheduled, cityColors }) {
           <div key={wi} className="grid grid-cols-7 gap-1">
             {week.map((date, di) => {
               if (!date) return <div key={di} />;
-              const stop = stopForDate(date, scheduled);
+              const stops = stopsForDate(date, scheduled);
+              const isTransition = stops.length > 1;
               const isDeadline = isSameDay(date, FERIAS_DEADLINE);
+              const stop = stops[0];
               const c = stop ? cityColors[stop.city] : null;
+              const c2 = isTransition ? cityColors[stops[1].city] : null;
               return (
                 <div
                   key={di}
-                  title={stop ? stop.city : undefined}
+                  title={isTransition ? `${stops[0].city} → ${stops[1].city}` : stop ? stop.city : undefined}
                   className="rounded-lg flex flex-col items-center justify-center gap-0.5 py-1"
                   style={{
                     minHeight: 40,
-                    background: c ? c.bg : 'transparent',
+                    background: isTransition ? `linear-gradient(135deg, ${c.bg} 50%, ${c2.bg} 50%)` : c ? c.bg : 'transparent',
                     color: c ? c.text : '#C4CCC8',
                     border: isDeadline ? `2px dashed ${CORAL}` : c ? `1px solid ${c.border}` : '1px solid transparent',
                   }}
                 >
                   <span className="text-xs font-medium leading-none">{date.getDate()}</span>
-                  {stop && (
+                  {isTransition ? (
+                    <span className="text-[7px] font-medium leading-none uppercase tracking-wide truncate max-w-full px-0.5">
+                      {cityAbbrev(stops[0].city)}/{cityAbbrev(stops[1].city)}
+                    </span>
+                  ) : stop && (
                     <span className="text-[8px] font-medium leading-none uppercase tracking-wide truncate max-w-full px-0.5">
                       {cityAbbrev(stop.city)}
                     </span>
