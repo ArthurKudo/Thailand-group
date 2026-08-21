@@ -1617,9 +1617,15 @@ function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, payTo, 
       schedule.forEach((m) => {
         const amount = m.perPerson[name];
         if (amount == null) return;
-        if (!map[m.key]) map[m.key] = { key: m.key, year: m.year, month: m.month, total: 0, parts: [] };
+        if (!map[m.key]) map[m.key] = { key: m.key, year: m.year, month: m.month, total: 0, parts: [], pairwise: {} };
         map[m.key].total += amount;
         map[m.key].parts.push({ domain, domainLabel, amount });
+        Object.entries(m.pairwise || {}).forEach(([debtor, creditors]) => {
+          if (!map[m.key].pairwise[debtor]) map[m.key].pairwise[debtor] = {};
+          Object.entries(creditors).forEach(([creditor, amt]) => {
+            map[m.key].pairwise[debtor][creditor] = (map[m.key].pairwise[debtor][creditor] || 0) + amt;
+          });
+        });
       });
     }
     addPart(destinoSchedule, 'viagem', 'Viagem');
@@ -1673,6 +1679,7 @@ function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, payTo, 
               const { record } = getPaymentRecord(paymentStatus, 'total', name, m.key);
               const status = monthPaymentStatus(m.year, m.month, !!record?.paid);
               const sc = PAYMENT_STATUS_COLOR[status];
+              const transfers = netPairwiseSettlements(m.pairwise).filter((t) => t.from === name || t.to === name);
               return (
                 <div key={m.key} className="rounded-lg px-3 py-2" style={{ background: SAND }}>
                   <div className="flex items-center justify-between text-sm mb-1">
@@ -1687,6 +1694,17 @@ function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, payTo, 
                       </div>
                     ))}
                   </div>
+                  {transfers.length > 0 && (
+                    <div className="space-y-0.5 mb-1.5">
+                      {transfers.map((t, idx) => (
+                        <div key={idx} className="flex items-center gap-1.5 text-xs" style={{ color: t.from === name ? CORAL : JADE_DARK }}>
+                          <span>{t.from === name ? 'Você paga pra' : 'Você recebe de'}</span>
+                          <span className="font-medium">{t.from === name ? t.to : t.from}</span>
+                          <span className="ml-auto font-medium">R$ {brl(t.amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="flex items-center justify-between gap-2">
                     <span className="text-[11px] font-medium px-2 py-0.5 rounded-full shrink-0" style={{ background: sc.bg, color: sc.text }}>
                       {PAYMENT_STATUS_LABEL[status]}
@@ -1974,12 +1992,24 @@ function PersonMonthlyModal({ domain, name, schedule, onClose, paymentStatus, on
               const { record } = getPaymentRecord(paymentStatus, domain, name, m.key);
               const status = monthPaymentStatus(m.year, m.month, !!record?.paid);
               const sc = PAYMENT_STATUS_COLOR[status];
+              const transfers = netPairwiseSettlements(m.pairwise).filter((t) => t.from === name || t.to === name);
               return (
                 <div key={m.key} className="rounded-lg px-3 py-2" style={{ background: SAND }}>
                   <div className="flex items-center justify-between text-sm">
                     <span style={{ color: '#4A5651' }}>{monthLabel}</span>
                     <span className="font-medium" style={{ color: INK }}>R$ {brl(m.perPerson[name])}</span>
                   </div>
+                  {transfers.length > 0 && (
+                    <div className="mt-1.5 space-y-0.5">
+                      {transfers.map((t, idx) => (
+                        <div key={idx} className="flex items-center gap-1.5 text-xs" style={{ color: t.from === name ? CORAL : JADE_DARK }}>
+                          <span>{t.from === name ? 'Você paga pra' : 'Você recebe de'}</span>
+                          <span className="font-medium">{t.from === name ? t.to : t.from}</span>
+                          <span className="ml-auto font-medium">R$ {brl(t.amount)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   <div className="flex items-center justify-between mt-1.5 gap-2">
                     <span className="text-[11px] font-medium px-2 py-0.5 rounded-full shrink-0" style={{ background: sc.bg, color: sc.text }}>
                       {PAYMENT_STATUS_LABEL[status]}
