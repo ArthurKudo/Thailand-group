@@ -1616,10 +1616,13 @@ function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, payTo, 
     function addPart(schedule, domain, domainLabel) {
       schedule.forEach((m) => {
         const amount = m.perPerson[name];
-        if (amount == null) return;
+        const isCreditorHere = Object.values(m.pairwise || {}).some((creditors) => creditors[name] != null);
+        if (amount == null && !isCreditorHere) return;
         if (!map[m.key]) map[m.key] = { key: m.key, year: m.year, month: m.month, total: 0, parts: [], pairwise: {} };
-        map[m.key].total += amount;
-        map[m.key].parts.push({ domain, domainLabel, amount });
+        if (amount != null) {
+          map[m.key].total += amount;
+          map[m.key].parts.push({ domain, domainLabel, amount });
+        }
         Object.entries(m.pairwise || {}).forEach(([debtor, creditors]) => {
           if (!map[m.key].pairwise[debtor]) map[m.key].pairwise[debtor] = {};
           Object.entries(creditors).forEach(([creditor, amt]) => {
@@ -1955,7 +1958,8 @@ function BalancesPanel({ domain, balances, settlements, schedule, members, payme
 }
 
 function PersonMonthlyModal({ domain, name, schedule, onClose, paymentStatus, onConfirmPayment, onRemoveProof }) {
-  const rows = schedule.filter((m) => m.perPerson[name] != null);
+  const rows = schedule.filter((m) => m.perPerson[name] != null
+    || Object.values(m.pairwise || {}).some((creditors) => creditors[name] != null));
   const [previewUrl, setPreviewUrl] = useState(null);
   const [confirmRemoveKey, setConfirmRemoveKey] = useState(null);
   const [uploadingKey, setUploadingKey] = useState(null);
