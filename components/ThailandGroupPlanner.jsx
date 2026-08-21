@@ -161,6 +161,19 @@ function computeMonthlySchedule(expenses) {
   });
   return Object.values(months).sort((a, b) => a.key.localeCompare(b.key));
 }
+function monthlyNetBalances(m) {
+  const names = new Set(Object.keys(m.perPerson));
+  Object.keys(m.pairwise || {}).forEach((debtor) => {
+    names.add(debtor);
+    Object.keys(m.pairwise[debtor]).forEach((creditor) => names.add(creditor));
+  });
+  const transfers = netPairwiseSettlements(m.pairwise);
+  return Array.from(names).map((name) => {
+    const received = transfers.filter((t) => t.to === name).reduce((s, t) => s + t.amount, 0);
+    const paid = transfers.filter((t) => t.from === name).reduce((s, t) => s + t.amount, 0);
+    return { name, net: received - paid };
+  });
+}
 function netPairwiseSettlements(pairwise) {
   const result = [];
   const seen = new Set();
@@ -2096,8 +2109,9 @@ function MonthlySummary({ schedule }) {
   function buildShareText() {
     return schedule.map((m) => {
       const label = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
-      const lines = Object.entries(m.perPerson).map(([name, amt]) => `  ${name}: R$ ${brl(amt)}`).join('\n');
       const transfers = netPairwiseSettlements(m.pairwise);
+      const nets = monthlyNetBalances(m);
+      const lines = nets.map(({ name, net }) => `  ${name}: ${net >= 0 ? '+' : '-'}R$ ${brl(Math.abs(net))}`).join('\n');
       const transferLines = transfers.length
         ? `\n  Pix:\n${transfers.map((t) => `    ${t.from} → ${t.to}: R$ ${brl(t.amount)}`).join('\n')}`
         : '';
@@ -2137,6 +2151,7 @@ function MonthlySummary({ schedule }) {
           <div className="space-y-3">
             {schedule.map((m) => {
               const transfers = netPairwiseSettlements(m.pairwise);
+              const nets = monthlyNetBalances(m);
               return (
                 <div key={m.key}>
                   <div className="text-xs font-medium mb-1 flex items-center justify-between" style={{ color: INK }}>
@@ -2144,10 +2159,12 @@ function MonthlySummary({ schedule }) {
                     <span style={{ color: '#96A19C', fontWeight: 400 }}>total R$ {brl(m.total)}</span>
                   </div>
                   <div className="space-y-0.5">
-                    {Object.entries(m.perPerson).map(([name, amt]) => (
+                    {nets.map(({ name, net }) => (
                       <div key={name} className="flex items-center justify-between text-xs" style={{ color: '#4A5651' }}>
                         <span>{name}</span>
-                        <span className="font-medium">R$ {brl(amt)}</span>
+                        <span className="font-medium" style={{ color: net >= 0 ? JADE_DARK : CORAL }}>
+                          {net >= 0 ? '+' : '-'}R$ {brl(Math.abs(net))}
+                        </span>
                       </div>
                     ))}
                   </div>
