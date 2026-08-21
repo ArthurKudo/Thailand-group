@@ -143,18 +143,40 @@ function computeMonthlySchedule(expenses) {
     const perInstallment = Number(e.amount || 0) / installments;
     const split = e.splitWith && e.splitWith.length ? e.splitWith : [];
     const perPersonPerInstallment = split.length ? perInstallment / split.length : 0;
+    const payer = e.paidBy;
     const [y, m] = e.purchaseDate.split('-').map(Number);
     for (let i = 0; i < installments; i++) {
       const d = new Date(y, m + i, 1);
       const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-      if (!months[key]) months[key] = { key, year: d.getFullYear(), month: d.getMonth(), perPerson: {}, total: 0 };
+      if (!months[key]) months[key] = { key, year: d.getFullYear(), month: d.getMonth(), perPerson: {}, total: 0, pairwise: {} };
       months[key].total += perInstallment;
       split.forEach((name) => {
         months[key].perPerson[name] = (months[key].perPerson[name] || 0) + perPersonPerInstallment;
+        if (payer && name !== payer) {
+          if (!months[key].pairwise[name]) months[key].pairwise[name] = {};
+          months[key].pairwise[name][payer] = (months[key].pairwise[name][payer] || 0) + perPersonPerInstallment;
+        }
       });
     }
   });
   return Object.values(months).sort((a, b) => a.key.localeCompare(b.key));
+}
+function netPairwiseSettlements(pairwise) {
+  const result = [];
+  const seen = new Set();
+  Object.keys(pairwise || {}).forEach((a) => {
+    Object.keys(pairwise[a] || {}).forEach((b) => {
+      const pairKey = [a, b].sort().join('|');
+      if (seen.has(pairKey)) return;
+      seen.add(pairKey);
+      const aOwesB = pairwise[a]?.[b] || 0;
+      const bOwesA = pairwise[b]?.[a] || 0;
+      const net = aOwesB - bOwesA;
+      if (net > 0.01) result.push({ from: a, to: b, amount: net });
+      else if (net < -0.01) result.push({ from: b, to: a, amount: -net });
+    });
+  });
+  return result.sort((x, y) => y.amount - x.amount);
 }
 function isoDateFromDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -1491,10 +1513,16 @@ function OrcamentoTab({
 function mergeSchedules(a, b) {
   const map = {};
   [...a, ...b].forEach((m) => {
-    if (!map[m.key]) map[m.key] = { key: m.key, year: m.year, month: m.month, perPerson: {}, total: 0 };
+    if (!map[m.key]) map[m.key] = { key: m.key, year: m.year, month: m.month, perPerson: {}, total: 0, pairwise: {} };
     map[m.key].total += m.total;
     Object.entries(m.perPerson).forEach(([name, amt]) => {
       map[m.key].perPerson[name] = (map[m.key].perPerson[name] || 0) + amt;
+    });
+    Object.entries(m.pairwise || {}).forEach(([debtor, creditors]) => {
+      if (!map[m.key].pairwise[debtor]) map[m.key].pairwise[debtor] = {};
+      Object.entries(creditors).forEach(([creditor, amt]) => {
+        map[m.key].pairwise[debtor][creditor] = (map[m.key].pairwise[debtor][creditor] || 0) + amt;
+      });
     });
   });
   return Object.values(map).sort((x, y) => x.key.localeCompare(y.key));
@@ -2035,7 +2063,11 @@ function MonthlySummary({ schedule }) {
     return schedule.map((m) => {
       const label = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
       const lines = Object.entries(m.perPerson).map(([name, amt]) => `  ${name}: R$ ${brl(amt)}`).join('\n');
-      return `${label} (total R$ ${brl(m.total)})\n${lines}`;
+      const transfers = netPairwiseSettlements(m.pairwise);
+      const transferLines = transfers.length
+        ? `\n  Pix:\n${transfers.map((t) => `    ${t.from} → ${t.to}: R$ ${brl(t.amount)}`).join('\n')}`
+        : '';
+      return `${label} (total R$ ${brl(m.total)})\n${lines}${transferLines}`;
     }).join('\n\n');
   }
 
@@ -2069,22 +2101,37 @@ function MonthlySummary({ schedule }) {
             </button>
           </div>
           <div className="space-y-3">
-            {schedule.map((m) => (
-              <div key={m.key}>
-                <div className="text-xs font-medium mb-1 flex items-center justify-between" style={{ color: INK }}>
-                  <span>{MONTHS_FULL_PT[m.month]} de {m.year}</span>
-                  <span style={{ color: '#96A19C', fontWeight: 400 }}>total R$ {brl(m.total)}</span>
-                </div>
-                <div className="space-y-0.5">
-                  {Object.entries(m.perPerson).map(([name, amt]) => (
-                    <div key={name} className="flex items-center justify-between text-xs" style={{ color: '#4A5651' }}>
-                      <span>{name}</span>
-                      <span className="font-medium">R$ {brl(amt)}</span>
+            {schedule.map((m) => {
+              const transfers = netPairwiseSettlements(m.pairwise);
+              return (
+                <div key={m.key}>
+                  <div className="text-xs font-medium mb-1 flex items-center justify-between" style={{ color: INK }}>
+                    <span>{MONTHS_FULL_PT[m.month]} de {m.year}</span>
+                    <span style={{ color: '#96A19C', fontWeight: 400 }}>total R$ {brl(m.total)}</span>
+                  </div>
+                  <div className="space-y-0.5">
+                    {Object.entries(m.perPerson).map(([name, amt]) => (
+                      <div key={name} className="flex items-center justify-between text-xs" style={{ color: '#4A5651' }}>
+                        <span>{name}</span>
+                        <span className="font-medium">R$ {brl(amt)}</span>
+                      </div>
+                    ))}
+                  </div>
+                  {transfers.length > 0 && (
+                    <div className="mt-1.5 pt-1.5 space-y-1" style={{ borderTop: `1px solid ${LINE}` }}>
+                      {transfers.map((t, idx) => (
+                        <div key={idx} className="flex items-center gap-1.5 text-xs" style={{ color: JADE_DARK }}>
+                          <span className="font-medium">{t.from}</span>
+                          <ChevronRight size={11} style={{ color: '#B7C1BC' }} />
+                          <span className="font-medium">{t.to}</span>
+                          <span className="ml-auto">Pix R$ {brl(t.amount)}</span>
+                        </div>
+                      ))}
                     </div>
-                  ))}
+                  )}
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
           <p className="text-[11px] mt-3" style={{ color: '#96A19C' }}>
             Baseado na data de compra e no número de parcelas de cada gasto — preencha "comprado em" nos gastos abaixo para aparecer aqui.
