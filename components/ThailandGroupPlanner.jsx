@@ -1696,11 +1696,14 @@ function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, payTo, 
               const status = monthPaymentStatus(m.year, m.month, !!record?.paid);
               const sc = PAYMENT_STATUS_COLOR[status];
               const transfers = netPairwiseSettlements(m.pairwise).filter((t) => t.from === name || t.to === name);
+              const net = transfers.reduce((s, t) => s + (t.to === name ? t.amount : -t.amount), 0);
               return (
                 <div key={m.key} className="rounded-lg px-3 py-2" style={{ background: SAND }}>
                   <div className="flex items-center justify-between text-sm mb-1">
                     <span style={{ color: '#4A5651' }}>{monthLabel}</span>
-                    <span className="font-medium" style={{ color: INK }}>R$ {brl(m.total)}</span>
+                    <span className="font-medium" style={{ color: net >= 0 ? JADE_DARK : CORAL }}>
+                      {net >= 0 ? '+' : '-'}R$ {brl(Math.abs(net))}
+                    </span>
                   </div>
                   <div className="space-y-0.5 mb-1.5">
                     {m.parts.map((p) => (
@@ -2010,11 +2013,14 @@ function PersonMonthlyModal({ domain, name, schedule, onClose, paymentStatus, on
               const status = monthPaymentStatus(m.year, m.month, !!record?.paid);
               const sc = PAYMENT_STATUS_COLOR[status];
               const transfers = netPairwiseSettlements(m.pairwise).filter((t) => t.from === name || t.to === name);
+              const net = transfers.reduce((s, t) => s + (t.to === name ? t.amount : -t.amount), 0);
               return (
                 <div key={m.key} className="rounded-lg px-3 py-2" style={{ background: SAND }}>
                   <div className="flex items-center justify-between text-sm">
                     <span style={{ color: '#4A5651' }}>{monthLabel}</span>
-                    <span className="font-medium" style={{ color: INK }}>R$ {brl(m.perPerson[name])}</span>
+                    <span className="font-medium" style={{ color: net >= 0 ? JADE_DARK : CORAL }}>
+                      {net >= 0 ? '+' : '-'}R$ {brl(Math.abs(net))}
+                    </span>
                   </div>
                   {transfers.length > 0 && (
                     <div className="mt-1.5 space-y-0.5">
