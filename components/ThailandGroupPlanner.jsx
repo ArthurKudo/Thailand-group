@@ -724,6 +724,7 @@ export default function ThailandGroupPlanner() {
             <RoteiroTab
               itinerary={itinerary} scheduled={scheduled} totalsByPhase={totalsByPhase}
               tripEnd={tripEnd} cityColors={cityColors}
+              activities={activities} onEditActivity={actHandlers.editItem} onLog={logChange}
               onAdd={addStop} onEdit={editStop} onRemove={removeStop} onMove={moveStop}
               onSetCityColor={setCityColor}
               onLogCityChange={logStopCityChange} onLogDaysChange={logStopDaysChange} onLogPhaseChange={logStopPhaseChange}
@@ -783,7 +784,7 @@ function DeadlineBanner({ status }) {
   );
 }
 
-function RoteiroTab({ itinerary, scheduled, totalsByPhase, tripEnd, cityColors, onAdd, onEdit, onRemove, onMove, onSetCityColor, onLogCityChange, onLogDaysChange, onLogPhaseChange }) {
+function RoteiroTab({ itinerary, scheduled, totalsByPhase, tripEnd, cityColors, activities, onEditActivity, onLog, onAdd, onEdit, onRemove, onMove, onSetCityColor, onLogCityChange, onLogDaysChange, onLogPhaseChange }) {
   const [view, setView] = useState('lista');
   const views = [
     { key: 'lista', label: 'Lista', icon: List },
@@ -818,6 +819,7 @@ function RoteiroTab({ itinerary, scheduled, totalsByPhase, tripEnd, cityColors, 
 
       {view === 'lista' && (
         <ListaView itinerary={itinerary} scheduled={scheduled} cityColors={cityColors} onEdit={onEdit} onRemove={onRemove} onMove={onMove} onAdd={onAdd} onSetCityColor={onSetCityColor}
+          activities={activities} onEditActivity={onEditActivity} onLog={onLog}
           onLogCityChange={onLogCityChange} onLogDaysChange={onLogDaysChange} onLogPhaseChange={onLogPhaseChange} />
       )}
       {view === 'calendario' && <CalendarioView scheduled={scheduled} tripEnd={tripEnd} cityColors={cityColors} />}
@@ -825,7 +827,7 @@ function RoteiroTab({ itinerary, scheduled, totalsByPhase, tripEnd, cityColors, 
   );
 }
 
-function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove, onAdd, onSetCityColor, onLogCityChange, onLogDaysChange, onLogPhaseChange }) {
+function ListaView({ itinerary, scheduled, cityColors, activities, onEditActivity, onLog, onEdit, onRemove, onMove, onAdd, onSetCityColor, onLogCityChange, onLogDaysChange, onLogPhaseChange }) {
   const [colorPickerId, setColorPickerId] = useState(null);
   const [confirmStop, setConfirmStop] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
@@ -906,6 +908,7 @@ function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove,
                     const date = sc ? addDays(sc.start, dayIdx) : null;
                     const dateKey = date ? isoDateFromDate(date) : String(dayIdx);
                     const dayNotes = stop.dayNotes || {};
+                    const cityActivities = activities.filter((a) => a.city === stop.city);
                     return (
                       <div key={dateKey} className="rounded-lg px-2.5 py-2" style={{ background: SAND }}>
                         <div className="text-[11px] font-medium mb-1" style={{ color: '#4A5651' }}>
@@ -919,6 +922,40 @@ function ListaView({ itinerary, scheduled, cityColors, onEdit, onRemove, onMove,
                           className="w-full text-xs rounded-md px-2 py-1.5 outline-none resize-none"
                           style={{ border: `1px solid ${LINE}`, background: 'white', color: INK }}
                         />
+
+                        {cityActivities.length > 0 ? (
+                          <div className="mt-1.5 space-y-1">
+                            {cityActivities.map((a) => {
+                              const attached = a.date === dateKey;
+                              return (
+                                <button key={a.id}
+                                  onClick={() => {
+                                    onEditActivity(a.id, { date: attached ? null : dateKey });
+                                    onLog(attached
+                                      ? `desvinculou o passeio "${a.name}" do dia ${date ? fmtDate(date) : dayIdx + 1}`
+                                      : `atrelou o passeio "${a.name}" ao dia ${date ? fmtDate(date) : dayIdx + 1} em "${stop.city}"`);
+                                  }}
+                                  className="w-full flex items-center gap-1.5 text-xs rounded-md px-2 py-1 text-left active:opacity-70 transition-opacity"
+                                  style={attached
+                                    ? { background: JADE_TINT, color: JADE_DARK, border: `1px solid #BFE3D5` }
+                                    : { background: 'white', color: '#7A867F', border: `1px solid ${LINE}` }}
+                                >
+                                  <span className="w-3.5 h-3.5 rounded flex items-center justify-center shrink-0" style={{ border: `1px solid ${attached ? JADE_DARK : LINE}`, background: attached ? JADE_DARK : 'white' }}>
+                                    {attached && <Check size={10} color="white" />}
+                                  </span>
+                                  <span className="flex-1 truncate">{a.name}</span>
+                                  {a.date && !attached && (
+                                    <span className="text-[10px] shrink-0" style={{ color: '#96A19C' }}>outro dia</span>
+                                  )}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] mt-1.5" style={{ color: '#96A19C' }}>
+                            Nenhum passeio cadastrado em {stop.city} ainda. Adicione na aba Destinos.
+                          </p>
+                        )}
                       </div>
                     );
                   })}
