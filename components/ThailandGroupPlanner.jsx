@@ -194,6 +194,10 @@ function netPairwiseSettlements(pairwise) {
 function isoDateFromDate(d) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
+function parseISODate(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
 function accommodationsToExpenses(list, scheduled) {
   return list.filter((item) => item.addedToBudget).map((item) => {
     const stop = scheduled.find((s) => s.city === item.city);
@@ -226,8 +230,44 @@ function activitiesToExpenses(list, scheduled) {
       paidBy: item.paidBy || null,
       splitWith: item.splitWith || [],
       purchaseDate: item.purchaseDate || (stop ? isoDateFromDate(stop.start) : null),
+      isFuturePayment: !!item.futurePayment,
     };
   });
+}
+function computeFuturePaymentSchedule(items) {
+  const months = {};
+  const now = new Date();
+  const nowStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  items.forEach((item) => {
+    if (!item.futurePayment || !item.futurePaymentDate || !item.paidBy) return;
+    const guests = (item.splitWith && item.splitWith.length) || 0;
+    const total = (Number(item.pricePerPerson) || 0) * guests;
+    if (!total) return;
+    const [dy, dm] = item.futurePaymentDate.split('-').map(Number);
+    if (!dy || !dm) return;
+    const deadlineStart = new Date(dy, dm - 1, 1);
+    let count = (deadlineStart.getFullYear() - nowStart.getFullYear()) * 12 + (deadlineStart.getMonth() - nowStart.getMonth()) + 1;
+    count = Math.max(1, count);
+    const split = item.splitWith && item.splitWith.length ? item.splitWith : [];
+    const perInstallment = total / count;
+    const perPersonPerInstallment = split.length ? perInstallment / split.length : 0;
+    for (let i = 0; i < count; i++) {
+      const d = new Date(nowStart.getFullYear(), nowStart.getMonth() + i, 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      if (!months[key]) months[key] = { key, year: d.getFullYear(), month: d.getMonth(), total: 0, perPerson: {}, guard: {}, pairwise: {} };
+      months[key].total += perInstallment;
+      split.forEach((name) => {
+        months[key].perPerson[name] = (months[key].perPerson[name] || 0) + perPersonPerInstallment;
+        if (name === item.paidBy) {
+          months[key].guard[name] = (months[key].guard[name] || 0) + perPersonPerInstallment;
+        } else {
+          if (!months[key].pairwise[name]) months[key].pairwise[name] = {};
+          months[key].pairwise[name][item.paidBy] = (months[key].pairwise[name][item.paidBy] || 0) + perPersonPerInstallment;
+        }
+      });
+    }
+  });
+  return Object.values(months).sort((a, b) => a.key.localeCompare(b.key));
 }
 function computeBalances(expenseList, members) {
   const bal = {};
@@ -647,13 +687,19 @@ export default function ThailandGroupPlanner() {
     ...activitiesToExpenses(activities, scheduled),
   ], [accommodations, activities, scheduled]);
 
-  const destinoSchedule = useMemo(() => computeMonthlySchedule(destinoExpenses), [destinoExpenses]);
+  const destinoExpensesForBalances = useMemo(
+    () => destinoExpenses.filter((e) => !e.isFuturePayment),
+    [destinoExpenses]
+  );
+
+  const destinoSchedule = useMemo(() => computeMonthlySchedule(destinoExpensesForBalances), [destinoExpensesForBalances]);
   const geralSchedule = useMemo(() => computeMonthlySchedule(expenses), [expenses]);
+  const futureSchedule = useMemo(() => computeFuturePaymentSchedule(activities), [activities]);
 
   const destinoBalances = useMemo(() => {
-    const raw = computeBalances(destinoExpenses, members);
+    const raw = computeBalances(destinoExpensesForBalances, members);
     return applySettledAmounts(raw, destinoSchedule, paymentStatus, 'viagem');
-  }, [destinoExpenses, members, destinoSchedule, paymentStatus]);
+  }, [destinoExpensesForBalances, members, destinoSchedule, paymentStatus]);
 
   const geralBalances = useMemo(() => {
     const raw = computeBalances(expenses, members);
@@ -775,6 +821,7 @@ export default function ThailandGroupPlanner() {
               destinoExpenses={destinoExpenses} destinoSchedule={destinoSchedule} destinoBalances={destinoBalances}
               destinoSettlements={destinoSettlements} destinoTotal={destinoTotal}
               geralSchedule={geralSchedule} geralBalances={geralBalances} geralSettlements={geralSettlements} geralTotal={geralTotal}
+              activities={activities} onEditActivity={actHandlers.editItem} futureSchedule={futureSchedule}
               onAdd={addExpense} onEdit={editExpense}
               onRemove={removeExpense} onToggleSplit={toggleSplit} onLog={logChange}
               paymentStatus={paymentStatus} onConfirmPayment={confirmPayment} onRemoveProof={removeProof}
@@ -1247,20 +1294,27 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [confirmRemoveBudget, setConfirmRemoveBudget] = useState(false);
   const [choosingPayer, setChoosingPayer] = useState(false);
+  const [choosingFuturePayment, setChoosingFuturePayment] = useState(false);
   const [budgetDate, setBudgetDate] = useState(item.purchaseDate || '');
   const [budgetInstallments, setBudgetInstallments] = useState(item.installments || 1);
+  const [futureDate, setFutureDate] = useState(item.futurePaymentDate || '');
   const split = item.splitWith || [];
   const guests = split.length;
 
   function addToBudget(payer) {
-    const patch = { addedToBudget: true, paidBy: payer, installments: Math.max(1, Number(budgetInstallments) || 1) };
+    const patch = { addedToBudget: true, futurePayment: false, futurePaymentDate: null, paidBy: payer, installments: Math.max(1, Number(budgetInstallments) || 1) };
     if (budgetDate) patch.purchaseDate = budgetDate;
     onEdit(item.id, patch);
     onLog(`adicionou a ${kindLabel} "${item.name}" às despesas (pago por ${payer})`);
     setChoosingPayer(false);
   }
+  function addFuturePayment(responsible) {
+    onEdit(item.id, { addedToBudget: true, futurePayment: true, paidBy: responsible, futurePaymentDate: futureDate || null, purchaseDate: null });
+    onLog(`marcou a ${kindLabel} "${item.name}" como pagamento futuro (${responsible} guarda até ${futureDate || 'data a definir'})`);
+    setChoosingFuturePayment(false);
+  }
   function removeFromBudget() {
-    onEdit(item.id, { addedToBudget: false, paidBy: null });
+    onEdit(item.id, { addedToBudget: false, futurePayment: false, futurePaymentDate: null, paidBy: null });
     onLog(`removeu a ${kindLabel} "${item.name}" das despesas`);
     setConfirmRemoveBudget(false);
   }
@@ -1355,7 +1409,22 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
             </div>
           )}
 
-          {item.addedToBudget ? (
+          {item.addedToBudget && item.futurePayment ? (
+            <div className="rounded-lg px-2.5 py-2 mt-1.5 space-y-1.5" style={{ background: JADE_TINT, color: JADE_DARK }}>
+              <div className="flex items-center justify-between gap-2 text-xs">
+                <span>Pagamento futuro · {item.paidBy} guarda</span>
+                <button onClick={() => setConfirmRemoveBudget(true)} className="font-medium underline active:opacity-60 transition-opacity shrink-0">
+                  Remover
+                </button>
+              </div>
+              <div className="flex items-center gap-2 flex-wrap text-xs">
+                <span>até</span>
+                <input type="date" value={item.futurePaymentDate || ''}
+                  onChange={(e) => { onEdit(item.id, { futurePaymentDate: e.target.value }); onLog(`alterou a data do pagamento futuro da ${kindLabel} "${item.name}" para ${e.target.value}`); }}
+                  className="rounded-md px-1.5 py-0.5 outline-none" style={{ border: '1px solid #BFE3D5', background: 'white', color: INK }} />
+              </div>
+            </div>
+          ) : item.addedToBudget ? (
             <div className="rounded-lg px-2.5 py-2 mt-1.5 space-y-1.5" style={{ background: JADE_TINT, color: JADE_DARK }}>
               <div className="flex items-center justify-between gap-2 text-xs">
                 <span>Nas despesas · pago por {item.paidBy}</span>
@@ -1405,10 +1474,41 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
                 </div>
               </div>
             </div>
+          ) : choosingFuturePayment ? (
+            <div className="rounded-lg p-2.5 mt-1.5 space-y-2" style={{ background: SAND }}>
+              <div className="flex items-center gap-2 flex-wrap text-xs">
+                <span style={{ color: '#7A867F' }}>Guardar o dinheiro até</span>
+                <input type="date" value={futureDate} onChange={(e) => setFutureDate(e.target.value)}
+                  className="rounded-md px-1.5 py-0.5 outline-none" style={{ border: `1px solid ${LINE}`, background: 'white' }} />
+              </div>
+              <div>
+                <div className="text-xs mb-1.5" style={{ color: '#7A867F' }}>Quem vai guardar/pagar?</div>
+                <div className="flex items-center gap-1.5 flex-wrap">
+                  {members.map((m) => (
+                    <button key={m} onClick={() => addFuturePayment(m)}
+                      className="px-2 py-0.5 rounded-full text-xs active:scale-95 transition-transform"
+                      style={{ border: `1px solid ${LINE}`, color: '#4A5651', background: 'white' }}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                  <button onClick={() => setChoosingFuturePayment(false)} className="text-xs active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </div>
           ) : (
-            <button onClick={() => setChoosingPayer(true)} className="flex items-center gap-1 text-xs font-medium mt-1.5 active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
-              <Wallet size={12} /> Adicionar às despesas
-            </button>
+            <div className="flex items-center gap-3 mt-1.5">
+              <button onClick={() => setChoosingPayer(true)} className="flex items-center gap-1 text-xs font-medium active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
+                <Wallet size={12} /> Adicionar às despesas
+              </button>
+              {type === 'activity' && (
+                <button onClick={() => setChoosingFuturePayment(true)} className="flex items-center gap-1 text-xs font-medium active:opacity-60 transition-opacity" style={{ color: '#7A867F' }}>
+                  <Wallet size={12} /> Pagamento futuro
+                </button>
+              )}
+            </div>
           )}
         </div>
         {avg && (
@@ -1470,6 +1570,7 @@ function OrcamentoTab({
   expenses, members, myName, cityColors,
   destinoExpenses, destinoSchedule, destinoBalances, destinoSettlements, destinoTotal,
   geralSchedule, geralBalances, geralSettlements, geralTotal,
+  activities, onEditActivity, futureSchedule,
   onAdd, onEdit, onRemove, onToggleSplit, onLog,
   paymentStatus, onConfirmPayment, onRemoveProof,
 }) {
@@ -1478,6 +1579,7 @@ function OrcamentoTab({
     { key: 'viagem', label: 'Viagem' },
     { key: 'geral', label: 'Outras' },
     { key: 'total', label: 'Total' },
+    { key: 'futuros', label: 'Futuros' },
   ];
 
   return (
@@ -1518,6 +1620,120 @@ function OrcamentoTab({
           destinoBalances={destinoBalances} geralBalances={geralBalances} members={members}
           paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof}
         />
+      )}
+      {section === 'futuros' && (
+        <FuturosSection activities={activities} schedule={futureSchedule} onEditActivity={onEditActivity} onLog={onLog} />
+      )}
+    </div>
+  );
+}
+
+function FuturosSection({ activities, schedule, onEditActivity, onLog }) {
+  const items = activities.filter((a) => a.futurePayment && a.addedToBudget);
+  const grandTotal = items.reduce((sum, a) => sum + (Number(a.pricePerPerson) || 0) * ((a.splitWith && a.splitWith.length) || 0), 0);
+  const [confirmRemoveId, setConfirmRemoveId] = useState(null);
+  const confirmItem = items.find((i) => i.id === confirmRemoveId);
+
+  function removeFuturePayment(id) {
+    const item = items.find((i) => i.id === id);
+    onEditActivity(id, { futurePayment: false, futurePaymentDate: null, addedToBudget: false, paidBy: null });
+    if (item) onLog(`removeu o pagamento futuro do passeio "${item.name}"`);
+    setConfirmRemoveId(null);
+  }
+
+  return (
+    <div>
+      <div className="rounded-2xl px-4 py-3 mb-4 flex items-center justify-between" style={{ background: JADE_TINT, border: `1px solid #BFE3D5` }}>
+        <span className="text-sm" style={{ color: JADE_DARK }}>Total em pagamentos futuros</span>
+        <span className="text-lg font-medium" style={{ color: JADE_DARK, fontFamily: "'Fraunces', serif" }}>R$ {brl(grandTotal)}</span>
+      </div>
+
+      {items.length === 0 ? (
+        <p className="text-sm py-6 text-center" style={{ color: '#96A19C' }}>
+          Nenhum pagamento futuro ainda. Em Destinos, marque um passeio como "Pagamento futuro".
+        </p>
+      ) : (
+        <div className="space-y-2 mb-5">
+          {items.map((item) => {
+            const total = (Number(item.pricePerPerson) || 0) * ((item.splitWith && item.splitWith.length) || 0);
+            return (
+              <div key={item.id} className="rounded-xl px-3.5 py-3 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-medium truncate" style={{ color: INK }}>{item.name}</span>
+                  <span className="text-sm font-medium shrink-0" style={{ color: INK }}>R$ {brl(total)}</span>
+                </div>
+                <div className="text-xs mt-0.5" style={{ color: '#7A867F' }}>
+                  {item.city} · {item.paidBy} guarda até {item.futurePaymentDate ? fmtDate(parseISODate(item.futurePaymentDate)) : '—'}
+                </div>
+                <button onClick={() => setConfirmRemoveId(item.id)} className="text-[11px] mt-1.5 active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
+                  Remover pagamento futuro
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <MonthlySummaryFuturos schedule={schedule} />
+
+      <ConfirmDialog
+        open={!!confirmRemoveId}
+        title="Remover pagamento futuro?"
+        message={confirmItem ? `"${confirmItem.name}" deixa de ser um pagamento futuro (não sai das despesas).` : ''}
+        onCancel={() => setConfirmRemoveId(null)}
+        onConfirm={() => removeFuturePayment(confirmRemoveId)}
+      />
+    </div>
+  );
+}
+
+function MonthlySummaryFuturos({ schedule }) {
+  const [expanded, setExpanded] = useState(true);
+  if (!schedule.length) return null;
+  const grandTotal = schedule.reduce((sum, m) => sum + m.total, 0);
+
+  return (
+    <div className="rounded-xl px-4 py-3 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+      <button onClick={() => setExpanded((v) => !v)} className="w-full flex items-center justify-between text-left active:opacity-70 transition-opacity">
+        <div>
+          <div className="text-xs font-medium uppercase tracking-wide" style={{ color: '#8A968E' }}>Quanto juntar por mês</div>
+          <div className="text-xs mt-0.5" style={{ color: '#96A19C' }}>
+            {schedule.length} mês{schedule.length === 1 ? '' : 'es'} · total R$ {brl(grandTotal)}
+          </div>
+        </div>
+        {expanded ? <ChevronUp size={16} className="shrink-0" style={{ color: '#96A19C' }} /> : <ChevronDown size={16} className="shrink-0" style={{ color: '#96A19C' }} />}
+      </button>
+
+      {expanded && (
+        <div className="space-y-3 mt-3">
+          {schedule.map((m) => {
+            const transfers = netPairwiseSettlements(m.pairwise);
+            return (
+              <div key={m.key}>
+                <div className="text-xs font-medium mb-1 flex items-center justify-between" style={{ color: INK }}>
+                  <span>{MONTHS_FULL_PT[m.month]} de {m.year}</span>
+                  <span style={{ color: '#96A19C', fontWeight: 400 }}>total R$ {brl(m.total)}</span>
+                </div>
+                <div className="space-y-0.5">
+                  {Object.entries(m.guard).map(([name, amt]) => (
+                    <div key={name} className="flex items-center justify-between text-xs" style={{ color: JADE_DARK }}>
+                      <span>{name} guarda</span>
+                      <span className="font-medium">R$ {brl(amt)}</span>
+                    </div>
+                  ))}
+                  {transfers.map((t, idx) => (
+                    <div key={idx} className="flex items-center gap-1.5 text-xs" style={{ color: '#4A5651' }}>
+                      <span className="font-medium">{t.from}</span>
+                      <ChevronRight size={11} style={{ color: '#B7C1BC' }} />
+                      <span className="font-medium">{t.to}</span>
+                      <span className="ml-auto">Pix R$ {brl(t.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
