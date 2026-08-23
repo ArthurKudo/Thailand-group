@@ -284,12 +284,17 @@ function computeBalances(expenseList, members) {
   });
   return bal;
 }
-function computePersonBreakdown(destinoExpenses, expenses, futureItems, members) {
+function computePersonBreakdown(destinoExpenses, expenses, futureItems, members, itinerary) {
   const data = {};
   function ensure(name) {
-    if (!data[name]) data[name] = { hospedagem: 0, passeio: 0, outras: 0, futuros: 0, paid: 0 };
+    if (!data[name]) data[name] = { hospedagem: 0, passeio: 0, outras: 0, futuros: 0, alimentacao: 0, paid: 0 };
   }
   members.forEach(ensure);
+
+  const foodPerPerson = (itinerary || []).reduce((sum, stop) => sum + (Number(stop.foodPerDay) || 0) * (Number(stop.days) || 0), 0);
+  if (foodPerPerson > 0) {
+    members.forEach((name) => { ensure(name); data[name].alimentacao = foodPerPerson; });
+  }
 
   destinoExpenses.forEach((e) => {
     if (e.isFuturePayment) return;
@@ -867,7 +872,7 @@ export default function ThailandGroupPlanner() {
               onEditStop={editStop} />
           )}
           {tab === 'orcamento' && (
-            <OrcamentoTab expenses={expenses} members={members}
+            <OrcamentoTab expenses={expenses} members={members} itinerary={itinerary}
               destinoExpenses={destinoExpenses} destinoSchedule={destinoSchedule} destinoBalances={destinoBalances}
               destinoTotal={destinoTotal}
               geralSchedule={geralSchedule} geralBalances={geralBalances} geralSettlements={geralSettlements} geralTotal={geralTotal}
@@ -1618,7 +1623,7 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
 }
 
 function OrcamentoTab({
-  expenses, members,
+  expenses, members, itinerary,
   destinoExpenses, destinoSchedule, destinoBalances, destinoTotal,
   geralSchedule, geralBalances, geralSettlements, geralTotal,
   activities, onEditActivity, futureSchedule, futureDone, onToggleFutureDone,
@@ -1650,7 +1655,7 @@ function OrcamentoTab({
 
       {section === 'dashboard' && (
         <ResumoSection
-          destinoExpenses={destinoExpenses} expenses={expenses} activities={activities} members={members}
+          destinoExpenses={destinoExpenses} expenses={expenses} activities={activities} members={members} itinerary={itinerary}
           destinoTotal={destinoTotal} geralTotal={geralTotal}
           destinoSchedule={destinoSchedule} geralSchedule={geralSchedule}
           destinoBalances={destinoBalances} geralBalances={geralBalances}
@@ -1902,7 +1907,7 @@ function mergeSchedules(a, b) {
 }
 
 function ResumoSection({
-  destinoExpenses, expenses, activities, members,
+  destinoExpenses, expenses, activities, members, itinerary,
   destinoTotal, geralTotal, destinoSchedule, geralSchedule, destinoBalances, geralBalances,
   paymentStatus, onConfirmPayment, onRemoveProof,
 }) {
@@ -1924,8 +1929,8 @@ function ResumoSection({
 
   const futureItems = useMemo(() => activities.filter((a) => a.futurePayment && a.addedToBudget), [activities]);
   const breakdown = useMemo(
-    () => computePersonBreakdown(destinoExpenses, expenses, futureItems, members),
-    [destinoExpenses, expenses, futureItems, members]
+    () => computePersonBreakdown(destinoExpenses, expenses, futureItems, members, itinerary),
+    [destinoExpenses, expenses, futureItems, members, itinerary]
   );
   const people = members.length ? members : Object.keys(breakdown);
   const totals = useMemo(() => {
@@ -1933,12 +1938,13 @@ function ResumoSection({
     people.forEach((name) => {
       const b = breakdown[name] || {};
       const spent = (b.hospedagem || 0) + (b.passeio || 0) + (b.outras || 0);
-      const total = spent + (b.futuros || 0);
+      const total = spent + (b.futuros || 0) + (b.alimentacao || 0);
       t[name] = { ...b, spent, total, net: (b.paid || 0) - spent };
     });
     return t;
   }, [breakdown, people]);
   const futurosTotal = futureItems.reduce((sum, a) => sum + (Number(a.pricePerPerson) || 0) * ((a.splitWith && a.splitWith.length) || 0), 0);
+  const alimentacaoTotal = people.reduce((sum, name) => sum + (totals[name]?.alimentacao || 0), 0);
   const sortedPeople = [...people].sort((a, b) => totals[b].total - totals[a].total);
 
   return (
@@ -1952,9 +1958,18 @@ function ResumoSection({
         <span>Outras: R$ {brl(geralTotal)}</span>
         <span>Média/pessoa: R$ {brl(people.length ? grandTotal / people.length : 0)}</span>
       </div>
-      {futurosTotal > 0 && (
-        <div className="text-xs mb-3 px-1" style={{ color: '#96A19C' }}>
-          + R$ {brl(futurosTotal)} em pagamentos futuros (ainda não pago por ninguém)
+      {(futurosTotal > 0 || alimentacaoTotal > 0) && (
+        <div className="mb-3 px-1">
+          {futurosTotal > 0 && (
+            <div className="text-xs" style={{ color: '#96A19C' }}>
+              + R$ {brl(futurosTotal)} em pagamentos futuros (ainda não pago por ninguém)
+            </div>
+          )}
+          {alimentacaoTotal > 0 && (
+            <div className="text-xs" style={{ color: '#96A19C' }}>
+              + R$ {brl(alimentacaoTotal)} estimado em alimentação (não é um gasto compartilhado)
+            </div>
+          )}
         </div>
       )}
 
@@ -2071,7 +2086,11 @@ function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, paymentStat
           })}
         </div>
         <div className="flex items-center justify-between text-[11px] mb-1" style={{ color: '#96A19C' }}>
-          <span>gasta R$ {brl(b.spent)}{b.futuros > 0 ? ` + R$ ${brl(b.futuros)} futuro` : ''}</span>
+          <span>
+            gasta R$ {brl(b.spent)}
+            {b.futuros > 0 ? ` + R$ ${brl(b.futuros)} futuro` : ''}
+            {b.alimentacao > 0 ? ` + R$ ${brl(b.alimentacao)} alimentação` : ''}
+          </span>
           <span>pagou R$ {brl(b.paid)}</span>
         </div>
         <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: '#7A867F' }}>
@@ -2179,6 +2198,7 @@ const DASHBOARD_CATS = [
   { key: 'passeio', label: 'Passeios', color: CITY_PALETTE[1] },
   { key: 'outras', label: 'Outras', color: CITY_PALETTE[2] },
   { key: 'futuros', label: 'Futuros', color: CITY_PALETTE[3] },
+  { key: 'alimentacao', label: 'Alimentação', color: CITY_PALETTE[4] },
 ];
 
 function GeralSection({ expenses, totalSpent, balances, settlements, schedule, members, onAdd, onEdit, onRemove, onToggleSplit, onLog, paymentStatus, onConfirmPayment, onRemoveProof }) {
