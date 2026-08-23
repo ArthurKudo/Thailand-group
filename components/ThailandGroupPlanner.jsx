@@ -1939,7 +1939,8 @@ function ResumoSection({
       const b = breakdown[name] || {};
       const spent = (b.hospedagem || 0) + (b.passeio || 0) + (b.outras || 0);
       const total = spent + (b.futuros || 0) + (b.alimentacao || 0);
-      t[name] = { ...b, spent, total, net: (b.paid || 0) - spent };
+      const passeios_total = (b.passeio || 0) + (b.futuros || 0);
+      t[name] = { ...b, spent, total, passeios_total, net: (b.paid || 0) - spent };
     });
     return t;
   }, [breakdown, people]);
@@ -1970,43 +1971,6 @@ function ResumoSection({
               + R$ {brl(alimentacaoTotal)} estimado em alimentação (não é um gasto compartilhado)
             </div>
           )}
-        </div>
-      )}
-
-      {people.length > 0 && (
-        <div className="rounded-xl overflow-hidden shadow-sm mb-4" style={{ background: 'white', border: `1px solid ${LINE}` }}>
-          <div className="px-3.5 py-2.5" style={{ borderBottom: `1px solid ${LINE}` }}>
-            <span className="text-xs font-medium uppercase tracking-wide" style={{ color: '#8A968E' }}>Quanto cada um gasta por categoria</span>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
-              <thead>
-                <tr style={{ background: SAND }}>
-                  <th className="text-left font-medium px-3 py-2 whitespace-nowrap" style={{ color: '#7A867F' }}>Pessoa</th>
-                  {DASHBOARD_CATS.map((c) => (
-                    <th key={c.key} className="text-right font-medium px-3 py-2 whitespace-nowrap" style={{ color: c.color.text }}>{c.label}</th>
-                  ))}
-                  <th className="text-right font-medium px-3 py-2 whitespace-nowrap" style={{ color: INK }}>Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedPeople.map((name, idx) => {
-                  const b = totals[name];
-                  return (
-                    <tr key={name} style={{ borderTop: idx === 0 ? 'none' : `1px solid ${LINE}` }}>
-                      <td className="px-3 py-2 font-medium whitespace-nowrap" style={{ color: INK }}>{name}</td>
-                      {DASHBOARD_CATS.map((c) => (
-                        <td key={c.key} className="text-right px-3 py-2 whitespace-nowrap" style={{ color: b[c.key] > 0 ? '#4A5651' : '#C4CCC8' }}>
-                          R$ {brl(b[c.key] || 0)}
-                        </td>
-                      ))}
-                      <td className="text-right px-3 py-2 font-medium whitespace-nowrap" style={{ color: JADE_DARK }}>R$ {brl(b.total)}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
         </div>
       )}
 
@@ -2106,27 +2070,31 @@ function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, paymentStat
           </div>
         </div>
         <div className="flex h-3 rounded-full overflow-hidden mb-1.5" style={{ background: SAND }}>
-          {DASHBOARD_CATS.map((c) => {
+          {DASHBOARD_DISPLAY_CATS.map((c) => {
             const v = b[c.key] || 0;
             const pct = b.total > 0 ? (v / b.total) * 100 : 0;
             if (pct <= 0) return null;
             return <div key={c.key} style={{ width: `${pct}%`, background: c.color.text }} title={`${c.label}: ${pct.toFixed(0)}% · R$ ${brl(v)}`} />;
           })}
         </div>
-        <div className="flex items-center justify-between text-[11px] mb-1" style={{ color: '#96A19C' }}>
-          <span>
-            gasta R$ {brl(b.spent)}
-            {b.futuros > 0 ? ` + R$ ${brl(b.futuros)} futuro` : ''}
-            {b.alimentacao > 0 ? ` + R$ ${brl(b.alimentacao)} alimentação` : ''}
-          </span>
+        <div className="flex items-center justify-between text-[11px] mb-1.5" style={{ color: '#96A19C' }}>
+          <span>gasta R$ {brl(b.spent)}{b.futuros > 0 ? ` + R$ ${brl(b.futuros)} futuro` : ''}</span>
           <span>pagou R$ {brl(b.paid)}</span>
         </div>
-        <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: '#7A867F' }}>
-          {DASHBOARD_CATS.map((c) => {
+        <div className="space-y-1">
+          {DASHBOARD_DISPLAY_CATS.map((c) => {
             const v = b[c.key] || 0;
             if (v <= 0 || !b.total) return null;
             const pct = Math.round((v / b.total) * 100);
-            return <span key={c.key}>{c.label} {pct}%</span>;
+            return (
+              <div key={c.key} className="flex items-center justify-between text-[11px]" style={{ color: '#7A867F' }}>
+                <span className="flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: c.color.text }} />
+                  {c.label} {pct}%
+                </span>
+                <span>R$ {brl(v)}</span>
+              </div>
+            );
           })}
         </div>
       </button>
@@ -2221,11 +2189,10 @@ function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, paymentStat
   );
 }
 
-const DASHBOARD_CATS = [
+const DASHBOARD_DISPLAY_CATS = [
   { key: 'hospedagem', label: 'Hospedagem', color: CITY_PALETTE[0] },
-  { key: 'passeio', label: 'Passeios', color: CITY_PALETTE[1] },
+  { key: 'passeios_total', label: 'Passeios', color: CITY_PALETTE[1] },
   { key: 'outras', label: 'Outras', color: CITY_PALETTE[2] },
-  { key: 'futuros', label: 'Futuros', color: CITY_PALETTE[3] },
   { key: 'alimentacao', label: 'Alimentação', color: CITY_PALETTE[4] },
 ];
 
