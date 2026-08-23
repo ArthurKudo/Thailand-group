@@ -2096,6 +2096,12 @@ function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, paymentStat
               </div>
             );
           })}
+          {b.total > 0 && (
+            <div className="flex items-center justify-between text-[11px] font-medium pt-1" style={{ color: INK, borderTop: `1px solid ${LINE}` }}>
+              <span>Total</span>
+              <span>R$ {brl(b.total)}</span>
+            </div>
+          )}
         </div>
       </button>
 
