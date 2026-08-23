@@ -502,6 +502,7 @@ export default function ThailandGroupPlanner() {
   const [cityColorOverrides, setCityColorOverrides] = useState({});
   const [changeLog, setChangeLog] = useState([]);
   const [paymentStatus, setPaymentStatus] = useState({});
+  const [futureDone, setFutureDone] = useState({});
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
@@ -510,7 +511,7 @@ export default function ThailandGroupPlanner() {
         const personal = window.localStorage.getItem('my-name');
         if (personal) setMyName(personal);
       } catch {}
-      const [m, it, ac, at, ex, cc, cl, ps] = await Promise.all([
+      const [m, it, ac, at, ex, cc, cl, ps, fd] = await Promise.all([
         loadShared('members', []),
         loadShared('itinerary', DEFAULT_ITINERARY),
         loadShared('accommodations', []),
@@ -519,6 +520,7 @@ export default function ThailandGroupPlanner() {
         loadShared('cityColorOverrides', {}),
         loadShared('changeLog', []),
         loadShared('paymentStatus', {}),
+        loadShared('futureDone', {}),
       ]);
       setMembers(m);
       setItinerary(it);
@@ -528,13 +530,14 @@ export default function ThailandGroupPlanner() {
       setCityColorOverrides(cc);
       setChangeLog(cl);
       setPaymentStatus(ps);
+      setFutureDone(fd);
       setBooting(false);
     })();
   }, []);
 
   const refreshShared = useCallback(async () => {
     setSyncing(true);
-    const [m, it, ac, at, ex, cc, cl, ps] = await Promise.all([
+    const [m, it, ac, at, ex, cc, cl, ps, fd] = await Promise.all([
       loadShared('members', []),
       loadShared('itinerary', DEFAULT_ITINERARY),
       loadShared('accommodations', []),
@@ -543,6 +546,7 @@ export default function ThailandGroupPlanner() {
       loadShared('cityColorOverrides', {}),
       loadShared('changeLog', []),
       loadShared('paymentStatus', {}),
+      loadShared('futureDone', {}),
     ]);
     setMembers(m);
     setItinerary(it);
@@ -552,6 +556,7 @@ export default function ThailandGroupPlanner() {
     setCityColorOverrides(cc);
     setChangeLog(cl);
     setPaymentStatus(ps);
+    setFutureDone(fd);
     setSyncing(false);
   }, []);
 
@@ -580,6 +585,17 @@ export default function ThailandGroupPlanner() {
     setPaymentStatus(next);
     await saveShared('paymentStatus', next);
     logChange(`removeu o comprovante de pagamento de ${name} em ${monthLabel}`);
+  }
+  async function toggleFutureDone(name, monthKey, monthLabel) {
+    const key = `${name}__${monthKey}`;
+    const next = { ...futureDone };
+    if (next[key]) delete next[key];
+    else next[key] = true;
+    setFutureDone(next);
+    await saveShared('futureDone', next);
+    logChange(next[key]
+      ? `marcou o pagamento futuro de ${name} em ${monthLabel} como feito`
+      : `desmarcou o pagamento futuro de ${name} em ${monthLabel}`);
   }
 
   async function setCityColor(city, paletteIndex) {
@@ -741,7 +757,6 @@ export default function ThailandGroupPlanner() {
     return applySettledAmounts(raw, geralSchedule, paymentStatus, 'geral');
   }, [expenses, members, geralSchedule, paymentStatus]);
 
-  const destinoSettlements = useMemo(() => computeSettlements(destinoBalances), [destinoBalances]);
   const geralSettlements = useMemo(() => computeSettlements(geralBalances), [geralBalances]);
 
   const destinoTotal = useMemo(() => destinoExpenses.reduce((sum, e) => sum + Number(e.amount || 0), 0), [destinoExpenses]);
@@ -852,11 +867,12 @@ export default function ThailandGroupPlanner() {
               onEditStop={editStop} />
           )}
           {tab === 'orcamento' && (
-            <OrcamentoTab expenses={expenses} members={members} myName={myName} cityColors={cityColors}
+            <OrcamentoTab expenses={expenses} members={members}
               destinoExpenses={destinoExpenses} destinoSchedule={destinoSchedule} destinoBalances={destinoBalances}
-              destinoSettlements={destinoSettlements} destinoTotal={destinoTotal}
+              destinoTotal={destinoTotal}
               geralSchedule={geralSchedule} geralBalances={geralBalances} geralSettlements={geralSettlements} geralTotal={geralTotal}
               activities={activities} onEditActivity={actHandlers.editItem} futureSchedule={futureSchedule}
+              futureDone={futureDone} onToggleFutureDone={toggleFutureDone}
               onAdd={addExpense} onEdit={editExpense}
               onRemove={removeExpense} onToggleSplit={toggleSplit} onLog={logChange}
               paymentStatus={paymentStatus} onConfirmPayment={confirmPayment} onRemoveProof={removeProof}
@@ -1602,19 +1618,17 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
 }
 
 function OrcamentoTab({
-  expenses, members, myName, cityColors,
-  destinoExpenses, destinoSchedule, destinoBalances, destinoSettlements, destinoTotal,
+  expenses, members,
+  destinoExpenses, destinoSchedule, destinoBalances, destinoTotal,
   geralSchedule, geralBalances, geralSettlements, geralTotal,
-  activities, onEditActivity, futureSchedule,
+  activities, onEditActivity, futureSchedule, futureDone, onToggleFutureDone,
   onAdd, onEdit, onRemove, onToggleSplit, onLog,
   paymentStatus, onConfirmPayment, onRemoveProof,
 }) {
   const [section, setSection] = useState('dashboard');
   const sections = [
     { key: 'dashboard', label: 'Resumo' },
-    { key: 'viagem', label: 'Viagem' },
     { key: 'geral', label: 'Outras' },
-    { key: 'total', label: 'Total' },
     { key: 'futuros', label: 'Futuros' },
   ];
 
@@ -1635,16 +1649,12 @@ function OrcamentoTab({
       </div>
 
       {section === 'dashboard' && (
-        <DashboardSection
+        <ResumoSection
           destinoExpenses={destinoExpenses} expenses={expenses} activities={activities} members={members}
           destinoTotal={destinoTotal} geralTotal={geralTotal}
-        />
-      )}
-      {section === 'viagem' && (
-        <ViagemSection
-          destinoExpenses={destinoExpenses} destinoTotal={destinoTotal} cityColors={cityColors}
-          balances={destinoBalances} settlements={destinoSettlements} schedule={destinoSchedule}
-          members={members} paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof}
+          destinoSchedule={destinoSchedule} geralSchedule={geralSchedule}
+          destinoBalances={destinoBalances} geralBalances={geralBalances}
+          paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof}
         />
       )}
       {section === 'geral' && (
@@ -1655,22 +1665,15 @@ function OrcamentoTab({
           paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof}
         />
       )}
-      {section === 'total' && (
-        <TotalSection
-          destinoTotal={destinoTotal} geralTotal={geralTotal}
-          destinoSchedule={destinoSchedule} geralSchedule={geralSchedule}
-          destinoBalances={destinoBalances} geralBalances={geralBalances} members={members}
-          paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof}
-        />
-      )}
       {section === 'futuros' && (
-        <FuturosSection activities={activities} schedule={futureSchedule} members={members} onEditActivity={onEditActivity} onLog={onLog} />
+        <FuturosSection activities={activities} schedule={futureSchedule} members={members} onEditActivity={onEditActivity} onLog={onLog}
+          futureDone={futureDone} onToggleFutureDone={onToggleFutureDone} />
       )}
     </div>
   );
 }
 
-function FuturosSection({ activities, schedule, members, onEditActivity, onLog }) {
+function FuturosSection({ activities, schedule, members, onEditActivity, onLog, futureDone, onToggleFutureDone }) {
   const items = activities.filter((a) => a.futurePayment && a.addedToBudget);
   const grandTotal = items.reduce((sum, a) => sum + (Number(a.pricePerPerson) || 0) * ((a.splitWith && a.splitWith.length) || 0), 0);
   const [confirmRemoveId, setConfirmRemoveId] = useState(null);
@@ -1678,20 +1681,24 @@ function FuturosSection({ activities, schedule, members, onEditActivity, onLog }
 
   const personTotals = useMemo(() => {
     const t = {};
+    function ensure(name) { if (!t[name]) t[name] = { own: 0, received: 0, pay: 0 }; }
     schedule.forEach((m) => {
       Object.entries(m.guard || {}).forEach(([name, amt]) => {
-        if (!t[name]) t[name] = { guard: 0, pay: 0 };
-        t[name].guard += amt;
+        ensure(name);
+        t[name].own += amt;
       });
       Object.entries(m.pairwise || {}).forEach(([debtor, creditors]) => {
-        const sum = Object.values(creditors).reduce((s, v) => s + v, 0);
-        if (!t[debtor]) t[debtor] = { guard: 0, pay: 0 };
-        t[debtor].pay += sum;
+        ensure(debtor);
+        Object.entries(creditors).forEach(([creditor, amt]) => {
+          t[debtor].pay += amt;
+          ensure(creditor);
+          t[creditor].received += amt;
+        });
       });
     });
     return t;
   }, [schedule]);
-  const peopleWithTotals = members.filter((m) => personTotals[m] && (personTotals[m].guard > 0 || personTotals[m].pay > 0));
+  const peopleWithTotals = members.filter((m) => personTotals[m] && (personTotals[m].own > 0 || personTotals[m].pay > 0 || personTotals[m].received > 0));
 
   function removeFuturePayment(id) {
     const item = items.find((i) => i.id === id);
@@ -1709,9 +1716,13 @@ function FuturosSection({ activities, schedule, members, onEditActivity, onLog }
 
       {peopleWithTotals.length > 0 && (
         <div className="space-y-2 mb-5">
-          {peopleWithTotals.map((name) => (
-            <FuturosPersonCard key={name} name={name} schedule={schedule} total={personTotals[name].guard + personTotals[name].pay} />
-          ))}
+          {peopleWithTotals.map((name) => {
+            const t = personTotals[name];
+            return (
+              <FuturosPersonCard key={name} name={name} schedule={schedule} total={t.own + t.received + t.pay}
+                futureDone={futureDone} onToggleFutureDone={onToggleFutureDone} />
+            );
+          })}
         </div>
       )}
 
@@ -1754,53 +1765,66 @@ function FuturosSection({ activities, schedule, members, onEditActivity, onLog }
   );
 }
 
-function FuturosPersonCard({ name, schedule, total }) {
-  const rows = schedule.filter((m) => (m.guard && m.guard[name] != null) || (m.pairwise && m.pairwise[name] != null));
+function FuturosPersonCard({ name, schedule, total, futureDone, onToggleFutureDone }) {
+  const [expanded, setExpanded] = useState(false);
+  const rows = schedule.filter((m) =>
+    (m.guard && m.guard[name] != null) ||
+    (m.pairwise && m.pairwise[name] != null) ||
+    Object.values(m.pairwise || {}).some((c) => c[name] != null)
+  );
+  const doneCount = rows.filter((m) => futureDone && futureDone[`${name}__${m.key}`]).length;
+
   return (
-    <div className="rounded-xl px-3.5 py-3 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-sm font-medium" style={{ color: INK }}>{name}</span>
-        <span className="text-sm font-medium" style={{ color: JADE_DARK }}>R$ {brl(total)}</span>
-      </div>
-      {rows.length > 0 && (
-        <div className="overflow-x-auto -mx-1 px-1">
-          <table style={{ borderCollapse: 'collapse' }}>
-            <thead>
-              <tr>
-                {rows.map((m) => (
-                  <th key={m.key} className="px-2 py-1 text-center text-[10px] font-medium uppercase tracking-wide whitespace-nowrap"
-                    style={{ color: '#96A19C', borderBottom: `1px solid ${LINE}` }}>
-                    {MONTHS_PT[m.month]}/{String(m.year).slice(2)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                {rows.map((m) => {
-                  const guardAmt = (m.guard && m.guard[name]) || 0;
-                  const payAmt = Object.values((m.pairwise && m.pairwise[name]) || {}).reduce((s, v) => s + v, 0);
-                  const cell = guardAmt + payAmt;
-                  return (
-                    <td key={m.key} className="px-2 py-1.5 text-center text-xs font-medium whitespace-nowrap"
-                      style={{ color: guardAmt > 0 ? JADE_DARK : CORAL }}>
-                      R$ {brl(cell)}
-                    </td>
-                  );
-                })}
-              </tr>
-              <tr>
-                {rows.map((m) => {
-                  const guardAmt = (m.guard && m.guard[name]) || 0;
-                  return (
-                    <td key={m.key} className="px-2 pb-0.5 text-center text-[10px] whitespace-nowrap" style={{ color: '#B7C1BC' }}>
-                      {guardAmt > 0 ? 'guarda' : 'Pix'}
-                    </td>
-                  );
-                })}
-              </tr>
-            </tbody>
-          </table>
+    <div className="rounded-xl shadow-sm overflow-hidden" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+      <button onClick={() => setExpanded((v) => !v)} className="w-full flex items-center gap-3 px-3.5 py-3 text-left active:opacity-70 transition-opacity">
+        <span className="w-8 h-8 rounded-full flex items-center justify-center text-sm font-medium shrink-0" style={{ background: JADE_TINT, color: JADE_DARK }}>
+          {name.charAt(0).toUpperCase()}
+        </span>
+        <div className="flex-1 min-w-0">
+          <div className="text-sm font-medium" style={{ color: INK }}>{name}</div>
+          {rows.length > 0 && (
+            <div className="text-[11px]" style={{ color: doneCount === rows.length ? JADE_DARK : '#96A19C' }}>
+              {doneCount}/{rows.length} mes{rows.length === 1 ? '' : 'es'} feito{doneCount === rows.length && rows.length ? 's ✓' : 's'}
+            </div>
+          )}
+        </div>
+        <span className="text-sm font-medium shrink-0" style={{ color: JADE_DARK }}>R$ {brl(total)}</span>
+        {expanded ? <ChevronUp size={16} className="shrink-0" style={{ color: '#96A19C' }} /> : <ChevronDown size={16} className="shrink-0" style={{ color: '#96A19C' }} />}
+      </button>
+
+      {expanded && rows.length > 0 && (
+        <div className="px-3.5 pb-3.5 pt-1 space-y-2" style={{ borderTop: `1px solid ${LINE}` }}>
+          {rows.map((m) => {
+            const guardAmt = (m.guard && m.guard[name]) || 0;
+            const payAmt = Object.values((m.pairwise && m.pairwise[name]) || {}).reduce((s, v) => s + v, 0);
+            const isGuardian = guardAmt > 0;
+            const received = isGuardian
+              ? Object.values(m.pairwise || {}).reduce((sum, creditors) => sum + (creditors[name] || 0), 0)
+              : 0;
+            const amount = isGuardian ? guardAmt + received : payAmt;
+            const monthLabel = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
+            const doneKey = `${name}__${m.key}`;
+            const done = !!(futureDone && futureDone[doneKey]);
+            return (
+              <label key={m.key} className="flex items-center gap-2.5 rounded-lg px-2.5 py-2 cursor-pointer" style={{ background: done ? JADE_TINT : SAND }}>
+                <input type="checkbox" checked={done} onChange={() => onToggleFutureDone(name, m.key, monthLabel)}
+                  className="w-4 h-4 shrink-0 accent-current" style={{ color: JADE }} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs" style={{ color: done ? JADE_DARK : '#4A5651', textDecoration: done ? 'line-through' : 'none' }}>
+                    {MONTHS_PT[m.month]}/{String(m.year).slice(2)}{isGuardian ? ' · guarda' : ' · Pix'}
+                  </div>
+                  {isGuardian && received > 0 && (
+                    <div className="text-[10px]" style={{ color: '#96A19C' }}>
+                      parte própria R$ {brl(guardAmt)} + recebido R$ {brl(received)}
+                    </div>
+                  )}
+                </div>
+                <span className="text-xs font-medium shrink-0" style={{ color: done ? JADE_DARK : (isGuardian ? JADE_DARK : CORAL) }}>
+                  R$ {brl(amount)}
+                </span>
+              </label>
+            );
+          })}
         </div>
       )}
     </div>
@@ -1877,12 +1901,13 @@ function mergeSchedules(a, b) {
   return Object.values(map).sort((x, y) => x.key.localeCompare(y.key));
 }
 
-function TotalSection({
-  destinoTotal, geralTotal, destinoSchedule, geralSchedule, destinoBalances, geralBalances, members,
+function ResumoSection({
+  destinoExpenses, expenses, activities, members,
+  destinoTotal, geralTotal, destinoSchedule, geralSchedule, destinoBalances, geralBalances,
   paymentStatus, onConfirmPayment, onRemoveProof,
 }) {
-  const grandTotal = destinoTotal + geralTotal;
   const [personModal, setPersonModal] = useState(null);
+  const grandTotal = destinoTotal + geralTotal;
   const balances = useMemo(() => {
     const merged = {};
     members.forEach((m) => { merged[m] = { paid: 0, owed: 0 }; });
@@ -1898,32 +1923,88 @@ function TotalSection({
   const settlements = useMemo(() => computeSettlements(balances), [balances]);
   const mergedSchedule = useMemo(() => mergeSchedules(destinoSchedule, geralSchedule), [destinoSchedule, geralSchedule]);
 
+  const futureItems = useMemo(() => activities.filter((a) => a.futurePayment && a.addedToBudget), [activities]);
+  const breakdown = useMemo(
+    () => computePersonBreakdown(destinoExpenses, expenses, futureItems, members),
+    [destinoExpenses, expenses, futureItems, members]
+  );
+  const people = members.length ? members : Object.keys(breakdown);
+  const totals = useMemo(() => {
+    const t = {};
+    people.forEach((name) => {
+      const b = breakdown[name] || {};
+      const spent = (b.hospedagem || 0) + (b.passeio || 0) + (b.outras || 0);
+      const total = spent + (b.futuros || 0);
+      t[name] = { ...b, spent, total, net: (b.paid || 0) - spent };
+    });
+    return t;
+  }, [breakdown, people]);
+  const maxTotal = Math.max(1, ...people.map((name) => totals[name].total));
+  const futurosTotal = futureItems.reduce((sum, a) => sum + (Number(a.pricePerPerson) || 0) * ((a.splitWith && a.splitWith.length) || 0), 0);
+  const sortedPeople = [...people].sort((a, b) => totals[b].total - totals[a].total);
+
   return (
     <div>
       <div className="rounded-2xl px-4 py-3 mb-2 flex items-center justify-between" style={{ background: JADE_TINT, border: `1px solid #BFE3D5` }}>
         <span className="text-sm" style={{ color: JADE_DARK }}>Total geral do grupo</span>
         <span className="text-lg font-medium" style={{ color: JADE_DARK, fontFamily: "'Fraunces', serif" }}>R$ {brl(grandTotal)}</span>
       </div>
-      <div className="flex items-center justify-between text-xs mb-4 px-1" style={{ color: '#96A19C' }}>
+      <div className="flex items-center justify-between text-xs mb-1 px-1" style={{ color: '#96A19C' }}>
         <span>Viagem: R$ {brl(destinoTotal)}</span>
         <span>Outras: R$ {brl(geralTotal)}</span>
+        <span>Média/pessoa: R$ {brl(people.length ? grandTotal / people.length : 0)}</span>
+      </div>
+      {futurosTotal > 0 && (
+        <div className="text-xs mb-3 px-1" style={{ color: '#96A19C' }}>
+          + R$ {brl(futurosTotal)} em pagamentos futuros (ainda não pago por ninguém)
+        </div>
+      )}
+
+      <div className="flex items-center gap-3 flex-wrap mb-4 text-[11px]">
+        {DASHBOARD_CATS.map((c) => (
+          <div key={c.key} className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c.color.text }} />
+            <span style={{ color: '#7A867F' }}>{c.label}</span>
+          </div>
+        ))}
       </div>
 
       <MonthlySummary schedule={mergedSchedule} />
 
-      {members.length > 0 && (
-        <div className="grid grid-cols-2 gap-2 mb-4">
-          {members.map((m) => {
-            const b = balances[m] || { paid: 0, owed: 0 };
-            const net = b.paid - b.owed;
+      {people.length === 0 ? (
+        <p className="text-sm py-6 text-center" style={{ color: '#96A19C' }}>Nenhuma pessoa no grupo ainda.</p>
+      ) : (
+        <div className="space-y-3 mb-4">
+          {sortedPeople.map((name) => {
+            const b = totals[name];
             return (
-              <button key={m} onClick={() => setPersonModal(m)}
-                className="text-left rounded-xl px-3 py-2.5 shadow-sm active:opacity-70 transition-opacity" style={{ background: 'white', border: `1px solid ${LINE}` }}>
-                <div className="text-xs" style={{ color: '#96A19C' }}>{m}</div>
-                <div className="text-sm font-medium" style={{ color: net >= 0 ? JADE_DARK : CORAL }}>
-                  {net >= 0 ? '+' : '-'}R$ {brl(Math.abs(net))}
+              <button key={name} onClick={() => setPersonModal(name)}
+                className="w-full text-left rounded-xl px-3.5 py-3 shadow-sm active:opacity-70 transition-opacity" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-sm font-medium" style={{ color: INK }}>{name}</span>
+                  <span className="text-sm font-medium" style={{ color: b.net >= 0 ? JADE_DARK : CORAL }}>
+                    {b.net >= 0 ? '+' : '-'}R$ {brl(Math.abs(b.net))}
+                  </span>
                 </div>
-                <div className="text-[11px]" style={{ color: '#96A19C' }}>pagou R$ {brl(b.paid)} · parte R$ {brl(b.owed)}</div>
+                <div className="flex h-3 rounded-full overflow-hidden mb-1.5" style={{ background: SAND }}>
+                  {DASHBOARD_CATS.map((c) => {
+                    const v = b[c.key] || 0;
+                    const pct = (v / maxTotal) * 100;
+                    if (pct <= 0) return null;
+                    return <div key={c.key} style={{ width: `${pct}%`, background: c.color.text }} title={`${c.label}: R$ ${brl(v)}`} />;
+                  })}
+                </div>
+                <div className="flex items-center justify-between text-[11px] mb-1" style={{ color: '#96A19C' }}>
+                  <span>gasta R$ {brl(b.spent)}{b.futuros > 0 ? ` + R$ ${brl(b.futuros)} futuro` : ''}</span>
+                  <span>pagou R$ {brl(b.paid)}</span>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: '#B7C1BC' }}>
+                  {DASHBOARD_CATS.map((c) => {
+                    const v = b[c.key] || 0;
+                    if (v <= 0) return null;
+                    return <span key={c.key}>{c.label} R$ {brl(v)}</span>;
+                  })}
+                </div>
               </button>
             );
           })}
@@ -1947,7 +2028,7 @@ function TotalSection({
       )}
 
       <p className="text-[11px] px-1" style={{ color: '#96A19C' }}>
-        Visão geral só pra conferência — edite os valores em Viagem ou Outras.
+        Clique numa pessoa pra ver o detalhamento por mês. Itens de Viagem ficam em Destinos.
       </p>
 
       {personModal && (
@@ -2114,154 +2195,6 @@ const DASHBOARD_CATS = [
   { key: 'outras', label: 'Outras', color: CITY_PALETTE[2] },
   { key: 'futuros', label: 'Futuros', color: CITY_PALETTE[3] },
 ];
-
-function DashboardSection({ destinoExpenses, expenses, activities, members, destinoTotal, geralTotal }) {
-  const futureItems = useMemo(() => activities.filter((a) => a.futurePayment && a.addedToBudget), [activities]);
-  const breakdown = useMemo(
-    () => computePersonBreakdown(destinoExpenses, expenses, futureItems, members),
-    [destinoExpenses, expenses, futureItems, members]
-  );
-  const people = members.length ? members : Object.keys(breakdown);
-  const totals = useMemo(() => {
-    const t = {};
-    people.forEach((name) => {
-      const b = breakdown[name] || {};
-      const spent = (b.hospedagem || 0) + (b.passeio || 0) + (b.outras || 0);
-      const total = spent + (b.futuros || 0);
-      t[name] = { ...b, spent, total, net: (b.paid || 0) - spent };
-    });
-    return t;
-  }, [breakdown, people]);
-  const maxTotal = Math.max(1, ...people.map((name) => totals[name].total));
-  const grandTotal = destinoTotal + geralTotal;
-  const futurosTotal = futureItems.reduce((sum, a) => sum + (Number(a.pricePerPerson) || 0) * ((a.splitWith && a.splitWith.length) || 0), 0);
-  const sortedPeople = [...people].sort((a, b) => totals[b].total - totals[a].total);
-
-  return (
-    <div>
-      <div className="grid grid-cols-2 gap-2 mb-2">
-        <div className="rounded-xl px-3.5 py-3 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
-          <div className="text-xs" style={{ color: '#96A19C' }}>Total geral da viagem</div>
-          <div className="text-lg font-medium" style={{ color: INK, fontFamily: "'Fraunces', serif" }}>R$ {brl(grandTotal)}</div>
-        </div>
-        <div className="rounded-xl px-3.5 py-3 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
-          <div className="text-xs" style={{ color: '#96A19C' }}>Média por pessoa</div>
-          <div className="text-lg font-medium" style={{ color: INK, fontFamily: "'Fraunces', serif" }}>
-            R$ {brl(people.length ? grandTotal / people.length : 0)}
-          </div>
-        </div>
-      </div>
-      {futurosTotal > 0 && (
-        <div className="text-xs mb-4 px-1" style={{ color: '#96A19C' }}>
-          + R$ {brl(futurosTotal)} em pagamentos futuros (ainda não pago por ninguém)
-        </div>
-      )}
-
-      <div className="flex items-center gap-3 flex-wrap mb-4 text-[11px]">
-        {DASHBOARD_CATS.map((c) => (
-          <div key={c.key} className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c.color.text }} />
-            <span style={{ color: '#7A867F' }}>{c.label}</span>
-          </div>
-        ))}
-      </div>
-
-      {people.length === 0 ? (
-        <p className="text-sm py-6 text-center" style={{ color: '#96A19C' }}>
-          Nenhuma pessoa no grupo ainda.
-        </p>
-      ) : (
-        <div className="space-y-3">
-          {sortedPeople.map((name) => {
-            const b = totals[name];
-            return (
-              <div key={name} className="rounded-xl px-3.5 py-3 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-sm font-medium" style={{ color: INK }}>{name}</span>
-                  <span className="text-sm font-medium" style={{ color: b.net >= 0 ? JADE_DARK : CORAL }}>
-                    {b.net >= 0 ? '+' : '-'}R$ {brl(Math.abs(b.net))}
-                  </span>
-                </div>
-                <div className="flex h-3 rounded-full overflow-hidden mb-1.5" style={{ background: SAND }}>
-                  {DASHBOARD_CATS.map((c) => {
-                    const v = b[c.key] || 0;
-                    const pct = (v / maxTotal) * 100;
-                    if (pct <= 0) return null;
-                    return <div key={c.key} style={{ width: `${pct}%`, background: c.color.text }} title={`${c.label}: R$ ${brl(v)}`} />;
-                  })}
-                </div>
-                <div className="flex items-center justify-between text-[11px] mb-1" style={{ color: '#96A19C' }}>
-                  <span>gasta R$ {brl(b.spent)}{b.futuros > 0 ? ` + R$ ${brl(b.futuros)} futuro` : ''}</span>
-                  <span>pagou R$ {brl(b.paid)}</span>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: '#B7C1BC' }}>
-                  {DASHBOARD_CATS.map((c) => {
-                    const v = b[c.key] || 0;
-                    if (v <= 0) return null;
-                    return <span key={c.key}>{c.label} R$ {brl(v)}</span>;
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ViagemSection({ destinoExpenses, destinoTotal, cityColors, balances, settlements, schedule, members, paymentStatus, onConfirmPayment, onRemoveProof }) {
-  const byCity = useMemo(() => {
-    const map = {};
-    destinoExpenses.forEach((e) => {
-      if (!map[e.city]) map[e.city] = { hospedagem: 0, passeio: 0, total: 0 };
-      map[e.city][e.kind] += e.amount;
-      map[e.city].total += e.amount;
-    });
-    return map;
-  }, [destinoExpenses]);
-  const cities = Object.keys(byCity);
-
-  return (
-    <div>
-      <div className="rounded-2xl px-4 py-3 mb-4 flex items-center justify-between" style={{ background: JADE_TINT, border: `1px solid #BFE3D5` }}>
-        <span className="text-sm" style={{ color: JADE_DARK }}>Total em hospedagens e passeios</span>
-        <span className="text-lg font-medium" style={{ color: JADE_DARK, fontFamily: "'Fraunces', serif" }}>R$ {brl(destinoTotal)}</span>
-      </div>
-
-      {cities.length === 0 ? (
-        <p className="text-sm py-6 text-center" style={{ color: '#96A19C' }}>
-          Nenhuma hospedagem ou passeio nas despesas ainda. Vá em Destinos e clique em "Adicionar às despesas".
-        </p>
-      ) : (
-        <div className="space-y-2 mb-4">
-          {cities.map((city) => {
-            const totals = byCity[city];
-            const c = cityColors[city];
-            return (
-              <div key={city} className="rounded-xl px-3.5 py-3 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
-                <div className="flex items-center gap-2 mb-1.5">
-                  {c && <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c.text }} />}
-                  <span className="text-sm font-medium" style={{ color: INK }}>{city}</span>
-                  <span className="ml-auto text-sm font-medium" style={{ color: INK }}>R$ {brl(totals.total)}</span>
-                </div>
-                <div className="flex items-center justify-between text-xs" style={{ color: '#7A867F' }}>
-                  <span>Hospedagem</span><span>R$ {brl(totals.hospedagem)}</span>
-                </div>
-                <div className="flex items-center justify-between text-xs" style={{ color: '#7A867F' }}>
-                  <span>Passeios</span><span>R$ {brl(totals.passeio)}</span>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-
-      <BalancesPanel domain="viagem" balances={balances} settlements={settlements} schedule={schedule} members={members}
-        paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
-    </div>
-  );
-}
 
 function GeralSection({ expenses, totalSpent, balances, settlements, schedule, members, onAdd, onEdit, onRemove, onToggleSplit, onLog, paymentStatus, onConfirmPayment, onRemoveProof }) {
   const [confirmExpenseId, setConfirmExpenseId] = useState(null);
