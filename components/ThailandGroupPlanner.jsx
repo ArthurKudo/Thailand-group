@@ -1973,14 +1973,42 @@ function ResumoSection({
         </div>
       )}
 
-      <div className="flex items-center gap-3 flex-wrap mb-4 text-[11px]">
-        {DASHBOARD_CATS.map((c) => (
-          <div key={c.key} className="flex items-center gap-1.5">
-            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c.color.text }} />
-            <span style={{ color: '#7A867F' }}>{c.label}</span>
+      {people.length > 0 && (
+        <div className="rounded-xl overflow-hidden shadow-sm mb-4" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+          <div className="px-3.5 py-2.5" style={{ borderBottom: `1px solid ${LINE}` }}>
+            <span className="text-xs font-medium uppercase tracking-wide" style={{ color: '#8A968E' }}>Quanto cada um gasta por categoria</span>
           </div>
-        ))}
-      </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs" style={{ borderCollapse: 'collapse' }}>
+              <thead>
+                <tr style={{ background: SAND }}>
+                  <th className="text-left font-medium px-3 py-2 whitespace-nowrap" style={{ color: '#7A867F' }}>Pessoa</th>
+                  {DASHBOARD_CATS.map((c) => (
+                    <th key={c.key} className="text-right font-medium px-3 py-2 whitespace-nowrap" style={{ color: c.color.text }}>{c.label}</th>
+                  ))}
+                  <th className="text-right font-medium px-3 py-2 whitespace-nowrap" style={{ color: INK }}>Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedPeople.map((name, idx) => {
+                  const b = totals[name];
+                  return (
+                    <tr key={name} style={{ borderTop: idx === 0 ? 'none' : `1px solid ${LINE}` }}>
+                      <td className="px-3 py-2 font-medium whitespace-nowrap" style={{ color: INK }}>{name}</td>
+                      {DASHBOARD_CATS.map((c) => (
+                        <td key={c.key} className="text-right px-3 py-2 whitespace-nowrap" style={{ color: b[c.key] > 0 ? '#4A5651' : '#C4CCC8' }}>
+                          R$ {brl(b[c.key] || 0)}
+                        </td>
+                      ))}
+                      <td className="text-right px-3 py-2 font-medium whitespace-nowrap" style={{ color: JADE_DARK }}>R$ {brl(b.total)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <MonthlySummary schedule={mergedSchedule} />
 
