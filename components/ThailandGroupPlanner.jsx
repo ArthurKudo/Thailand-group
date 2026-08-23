@@ -2112,6 +2112,9 @@ function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSched
               const monthLabel = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
               const transfers = netPairwiseSettlements(m.pairwise).filter((t) => t.from === name || t.to === name);
               const net = transfers.reduce((s, t) => s + (t.to === name ? t.amount : -t.amount), 0);
+              const futurePay = m.futureTransfers.filter((t) => t.from === name).reduce((s, t) => s + t.amount, 0);
+              const addends = [...m.parts.map((p) => p.amount), ...(futurePay > 0 ? [futurePay] : [])];
+              const monthTotal = m.total + futurePay;
               return (
                 <div key={m.key} className="rounded-lg px-3 py-2" style={{ background: SAND }}>
                   <div className="flex items-center justify-between text-sm mb-1">
@@ -2128,6 +2131,12 @@ function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSched
                       </div>
                     ))}
                   </div>
+                  {monthTotal > 0 && (
+                    <div className="flex items-center justify-between text-[11px] font-medium mb-1.5 pt-1" style={{ color: INK, borderTop: `1px dashed ${LINE}` }}>
+                      <span>Total do mês{addends.length > 1 ? ` (${addends.map((a) => brl(a)).join(' + ')})` : ''}</span>
+                      <span>R$ {brl(monthTotal)}</span>
+                    </div>
+                  )}
                   {transfers.length > 0 && (
                     <div className="space-y-1.5 mb-1">
                       {transfers.map((t, idx) => (
