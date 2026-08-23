@@ -1622,17 +1622,35 @@ function OrcamentoTab({
         />
       )}
       {section === 'futuros' && (
-        <FuturosSection activities={activities} schedule={futureSchedule} onEditActivity={onEditActivity} onLog={onLog} />
+        <FuturosSection activities={activities} schedule={futureSchedule} members={members} onEditActivity={onEditActivity} onLog={onLog} />
       )}
     </div>
   );
 }
 
-function FuturosSection({ activities, schedule, onEditActivity, onLog }) {
+function FuturosSection({ activities, schedule, members, onEditActivity, onLog }) {
   const items = activities.filter((a) => a.futurePayment && a.addedToBudget);
   const grandTotal = items.reduce((sum, a) => sum + (Number(a.pricePerPerson) || 0) * ((a.splitWith && a.splitWith.length) || 0), 0);
   const [confirmRemoveId, setConfirmRemoveId] = useState(null);
+  const [personModal, setPersonModal] = useState(null);
   const confirmItem = items.find((i) => i.id === confirmRemoveId);
+
+  const personTotals = useMemo(() => {
+    const t = {};
+    schedule.forEach((m) => {
+      Object.entries(m.guard || {}).forEach(([name, amt]) => {
+        if (!t[name]) t[name] = { guard: 0, pay: 0 };
+        t[name].guard += amt;
+      });
+      Object.entries(m.pairwise || {}).forEach(([debtor, creditors]) => {
+        const sum = Object.values(creditors).reduce((s, v) => s + v, 0);
+        if (!t[debtor]) t[debtor] = { guard: 0, pay: 0 };
+        t[debtor].pay += sum;
+      });
+    });
+    return t;
+  }, [schedule]);
+  const peopleWithTotals = members.filter((m) => personTotals[m] && (personTotals[m].guard > 0 || personTotals[m].pay > 0));
 
   function removeFuturePayment(id) {
     const item = items.find((i) => i.id === id);
@@ -1674,7 +1692,30 @@ function FuturosSection({ activities, schedule, onEditActivity, onLog }) {
         </div>
       )}
 
+      {peopleWithTotals.length > 0 && (
+        <div className="grid grid-cols-2 gap-2 mb-4">
+          {peopleWithTotals.map((m) => {
+            const t = personTotals[m];
+            const total = t.guard + t.pay;
+            return (
+              <button key={m} onClick={() => setPersonModal(m)}
+                className="text-left rounded-xl px-3 py-2.5 shadow-sm active:opacity-70 transition-opacity" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+                <div className="text-xs" style={{ color: '#96A19C' }}>{m}</div>
+                <div className="text-sm font-medium" style={{ color: JADE_DARK }}>R$ {brl(total)}</div>
+                <div className="text-[11px]" style={{ color: '#96A19C' }}>
+                  {t.guard > 0 && `guarda R$ ${brl(t.guard)}`}{t.guard > 0 && t.pay > 0 ? ' · ' : ''}{t.pay > 0 && `paga R$ ${brl(t.pay)}`}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <MonthlySummaryFuturos schedule={schedule} />
+
+      {personModal && (
+        <FuturosPersonModal name={personModal} schedule={schedule} onClose={() => setPersonModal(null)} />
+      )}
 
       <ConfirmDialog
         open={!!confirmRemoveId}
@@ -1683,6 +1724,48 @@ function FuturosSection({ activities, schedule, onEditActivity, onLog }) {
         onCancel={() => setConfirmRemoveId(null)}
         onConfirm={() => removeFuturePayment(confirmRemoveId)}
       />
+    </div>
+  );
+}
+
+function FuturosPersonModal({ name, schedule, onClose }) {
+  const rows = schedule.filter((m) => (m.guard && m.guard[name] != null) || (m.pairwise && m.pairwise[name] != null));
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(28,42,39,0.45)' }} onClick={onClose}>
+      <div className="w-full max-w-sm rounded-2xl p-5 shadow-lg max-h-[80vh] overflow-y-auto" style={{ background: 'white' }} onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3">
+          <div className="text-base" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{name} · por mês</div>
+          <button onClick={onClose} style={{ color: '#C4CCC8' }} className="p-1 -m-1 active:scale-90 transition-transform"><X size={16} /></button>
+        </div>
+        {rows.length === 0 ? (
+          <p className="text-xs" style={{ color: '#96A19C' }}>Nenhum pagamento futuro para {name}.</p>
+        ) : (
+          <div className="space-y-2">
+            {rows.map((m) => {
+              const monthLabel = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
+              const guardAmt = m.guard ? m.guard[name] : null;
+              const owed = (m.pairwise && m.pairwise[name]) || {};
+              return (
+                <div key={m.key} className="rounded-lg px-3 py-2 space-y-1" style={{ background: SAND }}>
+                  <div className="text-sm" style={{ color: '#4A5651' }}>{monthLabel}</div>
+                  {guardAmt != null && (
+                    <div className="flex items-center justify-between text-xs" style={{ color: JADE_DARK }}>
+                      <span>Guardar (parte própria)</span>
+                      <span className="font-medium">R$ {brl(guardAmt)}</span>
+                    </div>
+                  )}
+                  {Object.entries(owed).map(([to, amt]) => (
+                    <div key={to} className="flex items-center justify-between text-xs" style={{ color: CORAL }}>
+                      <span>Pix pra {to}</span>
+                      <span className="font-medium">R$ {brl(amt)}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
