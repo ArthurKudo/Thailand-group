@@ -1674,7 +1674,6 @@ function FuturosSection({ activities, schedule, members, onEditActivity, onLog }
   const items = activities.filter((a) => a.futurePayment && a.addedToBudget);
   const grandTotal = items.reduce((sum, a) => sum + (Number(a.pricePerPerson) || 0) * ((a.splitWith && a.splitWith.length) || 0), 0);
   const [confirmRemoveId, setConfirmRemoveId] = useState(null);
-  const [personModal, setPersonModal] = useState(null);
   const confirmItem = items.find((i) => i.id === confirmRemoveId);
 
   const personTotals = useMemo(() => {
@@ -1708,6 +1707,14 @@ function FuturosSection({ activities, schedule, members, onEditActivity, onLog }
         <span className="text-lg font-medium" style={{ color: JADE_DARK, fontFamily: "'Fraunces', serif" }}>R$ {brl(grandTotal)}</span>
       </div>
 
+      {peopleWithTotals.length > 0 && (
+        <div className="space-y-2 mb-5">
+          {peopleWithTotals.map((name) => (
+            <FuturosPersonCard key={name} name={name} schedule={schedule} total={personTotals[name].guard + personTotals[name].pay} />
+          ))}
+        </div>
+      )}
+
       {items.length === 0 ? (
         <p className="text-sm py-6 text-center" style={{ color: '#96A19C' }}>
           Nenhum pagamento futuro ainda. Em Destinos, marque um passeio como "Pagamento futuro".
@@ -1734,30 +1741,7 @@ function FuturosSection({ activities, schedule, members, onEditActivity, onLog }
         </div>
       )}
 
-      {peopleWithTotals.length > 0 && (
-        <div className="grid grid-cols-2 gap-2 mb-4">
-          {peopleWithTotals.map((m) => {
-            const t = personTotals[m];
-            const total = t.guard + t.pay;
-            return (
-              <button key={m} onClick={() => setPersonModal(m)}
-                className="text-left rounded-xl px-3 py-2.5 shadow-sm active:opacity-70 transition-opacity" style={{ background: 'white', border: `1px solid ${LINE}` }}>
-                <div className="text-xs" style={{ color: '#96A19C' }}>{m}</div>
-                <div className="text-sm font-medium" style={{ color: JADE_DARK }}>R$ {brl(total)}</div>
-                <div className="text-[11px]" style={{ color: '#96A19C' }}>
-                  {t.guard > 0 && `guarda R$ ${brl(t.guard)}`}{t.guard > 0 && t.pay > 0 ? ' · ' : ''}{t.pay > 0 && `paga R$ ${brl(t.pay)}`}
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
       <MonthlySummaryFuturos schedule={schedule} />
-
-      {personModal && (
-        <FuturosPersonModal name={personModal} schedule={schedule} onClose={() => setPersonModal(null)} />
-      )}
 
       <ConfirmDialog
         open={!!confirmRemoveId}
@@ -1770,44 +1754,55 @@ function FuturosSection({ activities, schedule, members, onEditActivity, onLog }
   );
 }
 
-function FuturosPersonModal({ name, schedule, onClose }) {
+function FuturosPersonCard({ name, schedule, total }) {
   const rows = schedule.filter((m) => (m.guard && m.guard[name] != null) || (m.pairwise && m.pairwise[name] != null));
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(28,42,39,0.45)' }} onClick={onClose}>
-      <div className="w-full max-w-sm rounded-2xl p-5 shadow-lg max-h-[80vh] overflow-y-auto" style={{ background: 'white' }} onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-3">
-          <div className="text-base" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{name} · por mês</div>
-          <button onClick={onClose} style={{ color: '#C4CCC8' }} className="p-1 -m-1 active:scale-90 transition-transform"><X size={16} /></button>
-        </div>
-        {rows.length === 0 ? (
-          <p className="text-xs" style={{ color: '#96A19C' }}>Nenhum pagamento futuro para {name}.</p>
-        ) : (
-          <div className="space-y-2">
-            {rows.map((m) => {
-              const monthLabel = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
-              const guardAmt = m.guard ? m.guard[name] : null;
-              const owed = (m.pairwise && m.pairwise[name]) || {};
-              return (
-                <div key={m.key} className="rounded-lg px-3 py-2 space-y-1" style={{ background: SAND }}>
-                  <div className="text-sm" style={{ color: '#4A5651' }}>{monthLabel}</div>
-                  {guardAmt != null && (
-                    <div className="flex items-center justify-between text-xs" style={{ color: JADE_DARK }}>
-                      <span>Guardar (parte própria)</span>
-                      <span className="font-medium">R$ {brl(guardAmt)}</span>
-                    </div>
-                  )}
-                  {Object.entries(owed).map(([to, amt]) => (
-                    <div key={to} className="flex items-center justify-between text-xs" style={{ color: CORAL }}>
-                      <span>Pix pra {to}</span>
-                      <span className="font-medium">R$ {brl(amt)}</span>
-                    </div>
-                  ))}
-                </div>
-              );
-            })}
-          </div>
-        )}
+    <div className="rounded-xl px-3.5 py-3 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm font-medium" style={{ color: INK }}>{name}</span>
+        <span className="text-sm font-medium" style={{ color: JADE_DARK }}>R$ {brl(total)}</span>
       </div>
+      {rows.length > 0 && (
+        <div className="overflow-x-auto -mx-1 px-1">
+          <table style={{ borderCollapse: 'collapse' }}>
+            <thead>
+              <tr>
+                {rows.map((m) => (
+                  <th key={m.key} className="px-2 py-1 text-center text-[10px] font-medium uppercase tracking-wide whitespace-nowrap"
+                    style={{ color: '#96A19C', borderBottom: `1px solid ${LINE}` }}>
+                    {MONTHS_PT[m.month]}/{String(m.year).slice(2)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                {rows.map((m) => {
+                  const guardAmt = (m.guard && m.guard[name]) || 0;
+                  const payAmt = Object.values((m.pairwise && m.pairwise[name]) || {}).reduce((s, v) => s + v, 0);
+                  const cell = guardAmt + payAmt;
+                  return (
+                    <td key={m.key} className="px-2 py-1.5 text-center text-xs font-medium whitespace-nowrap"
+                      style={{ color: guardAmt > 0 ? JADE_DARK : CORAL }}>
+                      R$ {brl(cell)}
+                    </td>
+                  );
+                })}
+              </tr>
+              <tr>
+                {rows.map((m) => {
+                  const guardAmt = (m.guard && m.guard[name]) || 0;
+                  return (
+                    <td key={m.key} className="px-2 pb-0.5 text-center text-[10px] whitespace-nowrap" style={{ color: '#B7C1BC' }}>
+                      {guardAmt > 0 ? 'guarda' : 'Pix'}
+                    </td>
+                  );
+                })}
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
