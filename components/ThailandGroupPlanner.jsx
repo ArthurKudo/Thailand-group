@@ -237,7 +237,7 @@ function activitiesToExpenses(list, scheduled) {
 function computeFuturePaymentSchedule(items) {
   const months = {};
   const now = new Date();
-  const nowStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const nowStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
   items.forEach((item) => {
     if (!item.futurePayment || !item.futurePaymentDate || !item.paidBy) return;
     const guests = (item.splitWith && item.splitWith.length) || 0;
@@ -1906,7 +1906,6 @@ function ResumoSection({
   destinoTotal, geralTotal, destinoSchedule, geralSchedule, destinoBalances, geralBalances,
   paymentStatus, onConfirmPayment, onRemoveProof,
 }) {
-  const [personModal, setPersonModal] = useState(null);
   const grandTotal = destinoTotal + geralTotal;
   const balances = useMemo(() => {
     const merged = {};
@@ -1939,7 +1938,6 @@ function ResumoSection({
     });
     return t;
   }, [breakdown, people]);
-  const maxTotal = Math.max(1, ...people.map((name) => totals[name].total));
   const futurosTotal = futureItems.reduce((sum, a) => sum + (Number(a.pricePerPerson) || 0) * ((a.splitWith && a.splitWith.length) || 0), 0);
   const sortedPeople = [...people].sort((a, b) => totals[b].total - totals[a].total);
 
@@ -1974,40 +1972,12 @@ function ResumoSection({
       {people.length === 0 ? (
         <p className="text-sm py-6 text-center" style={{ color: '#96A19C' }}>Nenhuma pessoa no grupo ainda.</p>
       ) : (
-        <div className="space-y-3 mb-4">
-          {sortedPeople.map((name) => {
-            const b = totals[name];
-            return (
-              <button key={name} onClick={() => setPersonModal(name)}
-                className="w-full text-left rounded-xl px-3.5 py-3 shadow-sm active:opacity-70 transition-opacity" style={{ background: 'white', border: `1px solid ${LINE}` }}>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-sm font-medium" style={{ color: INK }}>{name}</span>
-                  <span className="text-sm font-medium" style={{ color: b.net >= 0 ? JADE_DARK : CORAL }}>
-                    {b.net >= 0 ? '+' : '-'}R$ {brl(Math.abs(b.net))}
-                  </span>
-                </div>
-                <div className="flex h-3 rounded-full overflow-hidden mb-1.5" style={{ background: SAND }}>
-                  {DASHBOARD_CATS.map((c) => {
-                    const v = b[c.key] || 0;
-                    const pct = (v / maxTotal) * 100;
-                    if (pct <= 0) return null;
-                    return <div key={c.key} style={{ width: `${pct}%`, background: c.color.text }} title={`${c.label}: R$ ${brl(v)}`} />;
-                  })}
-                </div>
-                <div className="flex items-center justify-between text-[11px] mb-1" style={{ color: '#96A19C' }}>
-                  <span>gasta R$ {brl(b.spent)}{b.futuros > 0 ? ` + R$ ${brl(b.futuros)} futuro` : ''}</span>
-                  <span>pagou R$ {brl(b.paid)}</span>
-                </div>
-                <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: '#B7C1BC' }}>
-                  {DASHBOARD_CATS.map((c) => {
-                    const v = b[c.key] || 0;
-                    if (v <= 0) return null;
-                    return <span key={c.key}>{c.label} R$ {brl(v)}</span>;
-                  })}
-                </div>
-              </button>
-            );
-          })}
+        <div className="space-y-2 mb-4">
+          {sortedPeople.map((name) => (
+            <ResumoPersonCard key={name} name={name} b={totals[name]}
+              destinoSchedule={destinoSchedule} geralSchedule={geralSchedule}
+              paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
+          ))}
         </div>
       )}
 
@@ -2030,17 +2000,12 @@ function ResumoSection({
       <p className="text-[11px] px-1" style={{ color: '#96A19C' }}>
         Clique numa pessoa pra ver o detalhamento por mês. Itens de Viagem ficam em Destinos.
       </p>
-
-      {personModal && (
-        <TotalPersonMonthlyModal name={personModal} destinoSchedule={destinoSchedule} geralSchedule={geralSchedule}
-          payTo={settlements.filter((s) => s.from === personModal)}
-          onClose={() => setPersonModal(null)} paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
-      )}
     </div>
   );
 }
 
-function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, payTo, onClose, paymentStatus, onConfirmPayment, onRemoveProof }) {
+function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, paymentStatus, onConfirmPayment, onRemoveProof }) {
+  const [expanded, setExpanded] = useState(false);
   const months = useMemo(() => {
     const map = {};
     function addPart(schedule, domain, domainLabel) {
@@ -2086,28 +2051,47 @@ function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, payTo, 
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(28,42,39,0.45)' }} onClick={onClose}>
-      <div className="w-full max-w-sm rounded-2xl p-5 shadow-lg max-h-[80vh] overflow-y-auto" style={{ background: 'white' }} onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-1">
-          <div className="text-base" style={{ fontFamily: "'Fraunces', serif", color: INK }}>{name} · por mês</div>
-          <button onClick={onClose} style={{ color: '#C4CCC8' }} className="p-1 -m-1 active:scale-90 transition-transform"><X size={16} /></button>
-        </div>
-        {payTo && payTo.length > 0 && (
-          <div className="text-xs mb-3" style={{ color: JADE_DARK }}>
-            Pagamento deve ser feito para{' '}
-            {payTo.map((s, idx) => (
-              <span key={s.to}>
-                <span className="font-medium">{s.to}</span> (R$ {brl(s.amount)}){idx < payTo.length - 1 ? ', ' : ''}
-              </span>
-            ))}
+    <div className="rounded-xl shadow-sm overflow-hidden" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+      <button onClick={() => setExpanded((v) => !v)} className="w-full text-left px-3.5 py-3 active:opacity-70 transition-opacity">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-sm font-medium" style={{ color: INK }}>{name}</span>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="text-sm font-medium" style={{ color: b.net >= 0 ? JADE_DARK : CORAL }}>
+              {b.net >= 0 ? '+' : '-'}R$ {brl(Math.abs(b.net))}
+            </span>
+            {expanded ? <ChevronUp size={14} style={{ color: '#96A19C' }} /> : <ChevronDown size={14} style={{ color: '#96A19C' }} />}
           </div>
-        )}
-        {uploadError && <p className="text-xs mb-2" style={{ color: CORAL }}>{uploadError}</p>}
-        {months.length === 0 ? (
-          <p className="text-xs" style={{ color: '#96A19C' }}>Nenhum valor com data definida ainda para {name}.</p>
-        ) : (
-          <div className="space-y-2.5">
-            {months.map((m) => {
+        </div>
+        <div className="flex h-3 rounded-full overflow-hidden mb-1.5" style={{ background: SAND }}>
+          {DASHBOARD_CATS.map((c) => {
+            const v = b[c.key] || 0;
+            const pct = b.total > 0 ? (v / b.total) * 100 : 0;
+            if (pct <= 0) return null;
+            return <div key={c.key} style={{ width: `${pct}%`, background: c.color.text }} title={`${c.label}: ${pct.toFixed(0)}% · R$ ${brl(v)}`} />;
+          })}
+        </div>
+        <div className="flex items-center justify-between text-[11px] mb-1" style={{ color: '#96A19C' }}>
+          <span>gasta R$ {brl(b.spent)}{b.futuros > 0 ? ` + R$ ${brl(b.futuros)} futuro` : ''}</span>
+          <span>pagou R$ {brl(b.paid)}</span>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: '#7A867F' }}>
+          {DASHBOARD_CATS.map((c) => {
+            const v = b[c.key] || 0;
+            if (v <= 0 || !b.total) return null;
+            const pct = Math.round((v / b.total) * 100);
+            return <span key={c.key}>{c.label} {pct}%</span>;
+          })}
+        </div>
+      </button>
+
+      {expanded && (
+        <div className="px-3.5 pb-3.5 pt-1" style={{ borderTop: `1px solid ${LINE}` }}>
+          {uploadError && <p className="text-xs mt-2 mb-1" style={{ color: CORAL }}>{uploadError}</p>}
+          {months.length === 0 ? (
+            <p className="text-xs pt-2" style={{ color: '#96A19C' }}>Nenhum valor com data definida ainda para {name}.</p>
+          ) : (
+            <div className="space-y-2 pt-2">
+              {months.map((m) => {
               const monthLabel = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
               const { record } = getPaymentRecord(paymentStatus, 'total', name, m.key);
               const status = monthPaymentStatus(m.year, m.month, !!record?.paid);
@@ -2165,9 +2149,10 @@ function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, payTo, 
                 </div>
               );
             })}
-          </div>
-        )}
-      </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {previewUrl && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" style={{ background: 'rgba(0,0,0,0.75)' }} onClick={(e) => { e.stopPropagation(); setPreviewUrl(null); }}>
