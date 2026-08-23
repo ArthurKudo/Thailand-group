@@ -284,6 +284,41 @@ function computeBalances(expenseList, members) {
   });
   return bal;
 }
+function computePersonBreakdown(destinoExpenses, expenses, futureItems, members) {
+  const data = {};
+  function ensure(name) {
+    if (!data[name]) data[name] = { hospedagem: 0, passeio: 0, outras: 0, futuros: 0, paid: 0 };
+  }
+  members.forEach(ensure);
+
+  destinoExpenses.forEach((e) => {
+    if (e.isFuturePayment) return;
+    const split = e.splitWith && e.splitWith.length ? e.splitWith : [];
+    const share = split.length ? Number(e.amount || 0) / split.length : 0;
+    split.forEach((name) => {
+      ensure(name);
+      if (e.kind === 'hospedagem') data[name].hospedagem += share;
+      else data[name].passeio += share;
+    });
+    if (e.paidBy) { ensure(e.paidBy); data[e.paidBy].paid += Number(e.amount || 0); }
+  });
+
+  expenses.forEach((e) => {
+    const split = e.splitWith && e.splitWith.length ? e.splitWith : [];
+    const share = split.length ? Number(e.amount || 0) / split.length : 0;
+    split.forEach((name) => { ensure(name); data[name].outras += share; });
+    if (e.paidBy) { ensure(e.paidBy); data[e.paidBy].paid += Number(e.amount || 0); }
+  });
+
+  futureItems.forEach((item) => {
+    const split = item.splitWith && item.splitWith.length ? item.splitWith : [];
+    const total = (Number(item.pricePerPerson) || 0) * split.length;
+    const share = split.length ? total / split.length : 0;
+    split.forEach((name) => { ensure(name); data[name].futuros += share; });
+  });
+
+  return data;
+}
 function computeSettlements(balances) {
   const nets = Object.entries(balances).map(([name, b]) => ({ name, net: b.paid - b.owed }));
   const debtors = nets.filter((n) => n.net < -0.01).map((n) => ({ ...n, net: -n.net })).sort((a, b) => b.net - a.net);
@@ -1574,8 +1609,9 @@ function OrcamentoTab({
   onAdd, onEdit, onRemove, onToggleSplit, onLog,
   paymentStatus, onConfirmPayment, onRemoveProof,
 }) {
-  const [section, setSection] = useState('viagem');
+  const [section, setSection] = useState('dashboard');
   const sections = [
+    { key: 'dashboard', label: 'Resumo' },
     { key: 'viagem', label: 'Viagem' },
     { key: 'geral', label: 'Outras' },
     { key: 'total', label: 'Total' },
@@ -1598,6 +1634,12 @@ function OrcamentoTab({
         })}
       </div>
 
+      {section === 'dashboard' && (
+        <DashboardSection
+          destinoExpenses={destinoExpenses} expenses={expenses} activities={activities} members={members}
+          destinoTotal={destinoTotal} geralTotal={geralTotal}
+        />
+      )}
       {section === 'viagem' && (
         <ViagemSection
           destinoExpenses={destinoExpenses} destinoTotal={destinoTotal} cityColors={cityColors}
@@ -2067,6 +2109,108 @@ function TotalPersonMonthlyModal({ name, destinoSchedule, geralSchedule, payTo, 
           setConfirmRemove(null);
         }}
       />
+    </div>
+  );
+}
+
+const DASHBOARD_CATS = [
+  { key: 'hospedagem', label: 'Hospedagem', color: CITY_PALETTE[0] },
+  { key: 'passeio', label: 'Passeios', color: CITY_PALETTE[1] },
+  { key: 'outras', label: 'Outras', color: CITY_PALETTE[2] },
+  { key: 'futuros', label: 'Futuros', color: CITY_PALETTE[3] },
+];
+
+function DashboardSection({ destinoExpenses, expenses, activities, members, destinoTotal, geralTotal }) {
+  const futureItems = useMemo(() => activities.filter((a) => a.futurePayment && a.addedToBudget), [activities]);
+  const breakdown = useMemo(
+    () => computePersonBreakdown(destinoExpenses, expenses, futureItems, members),
+    [destinoExpenses, expenses, futureItems, members]
+  );
+  const people = members.length ? members : Object.keys(breakdown);
+  const totals = useMemo(() => {
+    const t = {};
+    people.forEach((name) => {
+      const b = breakdown[name] || {};
+      const spent = (b.hospedagem || 0) + (b.passeio || 0) + (b.outras || 0);
+      const total = spent + (b.futuros || 0);
+      t[name] = { ...b, spent, total, net: (b.paid || 0) - spent };
+    });
+    return t;
+  }, [breakdown, people]);
+  const maxTotal = Math.max(1, ...people.map((name) => totals[name].total));
+  const grandTotal = destinoTotal + geralTotal;
+  const futurosTotal = futureItems.reduce((sum, a) => sum + (Number(a.pricePerPerson) || 0) * ((a.splitWith && a.splitWith.length) || 0), 0);
+  const sortedPeople = [...people].sort((a, b) => totals[b].total - totals[a].total);
+
+  return (
+    <div>
+      <div className="grid grid-cols-2 gap-2 mb-2">
+        <div className="rounded-xl px-3.5 py-3 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+          <div className="text-xs" style={{ color: '#96A19C' }}>Total geral da viagem</div>
+          <div className="text-lg font-medium" style={{ color: INK, fontFamily: "'Fraunces', serif" }}>R$ {brl(grandTotal)}</div>
+        </div>
+        <div className="rounded-xl px-3.5 py-3 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+          <div className="text-xs" style={{ color: '#96A19C' }}>Média por pessoa</div>
+          <div className="text-lg font-medium" style={{ color: INK, fontFamily: "'Fraunces', serif" }}>
+            R$ {brl(people.length ? grandTotal / people.length : 0)}
+          </div>
+        </div>
+      </div>
+      {futurosTotal > 0 && (
+        <div className="text-xs mb-4 px-1" style={{ color: '#96A19C' }}>
+          + R$ {brl(futurosTotal)} em pagamentos futuros (ainda não pago por ninguém)
+        </div>
+      )}
+
+      <div className="flex items-center gap-3 flex-wrap mb-4 text-[11px]">
+        {DASHBOARD_CATS.map((c) => (
+          <div key={c.key} className="flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: c.color.text }} />
+            <span style={{ color: '#7A867F' }}>{c.label}</span>
+          </div>
+        ))}
+      </div>
+
+      {people.length === 0 ? (
+        <p className="text-sm py-6 text-center" style={{ color: '#96A19C' }}>
+          Nenhuma pessoa no grupo ainda.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {sortedPeople.map((name) => {
+            const b = totals[name];
+            return (
+              <div key={name} className="rounded-xl px-3.5 py-3 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-sm font-medium" style={{ color: INK }}>{name}</span>
+                  <span className="text-sm font-medium" style={{ color: b.net >= 0 ? JADE_DARK : CORAL }}>
+                    {b.net >= 0 ? '+' : '-'}R$ {brl(Math.abs(b.net))}
+                  </span>
+                </div>
+                <div className="flex h-3 rounded-full overflow-hidden mb-1.5" style={{ background: SAND }}>
+                  {DASHBOARD_CATS.map((c) => {
+                    const v = b[c.key] || 0;
+                    const pct = (v / maxTotal) * 100;
+                    if (pct <= 0) return null;
+                    return <div key={c.key} style={{ width: `${pct}%`, background: c.color.text }} title={`${c.label}: R$ ${brl(v)}`} />;
+                  })}
+                </div>
+                <div className="flex items-center justify-between text-[11px] mb-1" style={{ color: '#96A19C' }}>
+                  <span>gasta R$ {brl(b.spent)}{b.futuros > 0 ? ` + R$ ${brl(b.futuros)} futuro` : ''}</span>
+                  <span>pagou R$ {brl(b.paid)}</span>
+                </div>
+                <div className="flex items-center gap-2 flex-wrap text-[11px]" style={{ color: '#B7C1BC' }}>
+                  {DASHBOARD_CATS.map((c) => {
+                    const v = b[c.key] || 0;
+                    if (v <= 0) return null;
+                    return <span key={c.key}>{c.label} R$ {brl(v)}</span>;
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
