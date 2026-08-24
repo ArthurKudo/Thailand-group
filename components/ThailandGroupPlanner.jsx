@@ -212,8 +212,13 @@ function accommodationsToExpenses(list, scheduled) {
       paidBy: item.paidBy || null,
       splitWith: item.splitWith || [],
       purchaseDate: item.purchaseDate || (stop ? isoDateFromDate(stop.start) : null),
+      isFuturePayment: !!item.futurePayment,
     };
   });
+}
+function futureItemTotal(item, kind) {
+  if (kind === 'hospedagem') return item.totalPrice ?? ((Number(item.dailyRate) || 0) * (Number(item.nights) || 0));
+  return (Number(item.pricePerPerson) || 0) * ((item.splitWith && item.splitWith.length) || 0);
 }
 function activitiesToExpenses(list, scheduled) {
   return list.filter((item) => item.addedToBudget).map((item) => {
@@ -240,8 +245,7 @@ function computeFuturePaymentSchedule(items) {
   const nowStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
   items.forEach((item) => {
     if (!item.futurePayment || !item.futurePaymentDate || !item.paidBy) return;
-    const guests = (item.splitWith && item.splitWith.length) || 0;
-    const total = (Number(item.pricePerPerson) || 0) * guests;
+    const total = Number(item.total) || 0;
     if (!total) return;
     const [dy, dm] = item.futurePaymentDate.split('-').map(Number);
     if (!dy || !dm) return;
@@ -287,7 +291,7 @@ function computeBalances(expenseList, members) {
 function computePersonBreakdown(destinoExpenses, expenses, futureItems, members, itinerary) {
   const data = {};
   function ensure(name) {
-    if (!data[name]) data[name] = { hospedagem: 0, passeio: 0, outras: 0, futuros: 0, alimentacao: 0, paid: 0 };
+    if (!data[name]) data[name] = { hospedagem: 0, passeio: 0, outras: 0, futuros: 0, futurosHospedagem: 0, futurosPasseio: 0, alimentacao: 0, paid: 0 };
   }
   members.forEach(ensure);
 
@@ -317,9 +321,14 @@ function computePersonBreakdown(destinoExpenses, expenses, futureItems, members,
 
   futureItems.forEach((item) => {
     const split = item.splitWith && item.splitWith.length ? item.splitWith : [];
-    const total = (Number(item.pricePerPerson) || 0) * split.length;
+    const total = Number(item.total) || 0;
     const share = split.length ? total / split.length : 0;
-    split.forEach((name) => { ensure(name); data[name].futuros += share; });
+    split.forEach((name) => {
+      ensure(name);
+      data[name].futuros += share;
+      if (item.kind === 'hospedagem') data[name].futurosHospedagem += share;
+      else data[name].futurosPasseio += share;
+    });
   });
 
   return data;
@@ -752,7 +761,12 @@ export default function ThailandGroupPlanner() {
 
   const destinoSchedule = useMemo(() => computeMonthlySchedule(destinoExpensesForBalances), [destinoExpensesForBalances]);
   const geralSchedule = useMemo(() => computeMonthlySchedule(expenses), [expenses]);
-  const futureSchedule = useMemo(() => computeFuturePaymentSchedule(activities), [activities]);
+
+  const futureItems = useMemo(() => [
+    ...accommodations.filter((a) => a.futurePayment && a.addedToBudget).map((a) => ({ ...a, kind: 'hospedagem', total: futureItemTotal(a, 'hospedagem') })),
+    ...activities.filter((a) => a.futurePayment && a.addedToBudget).map((a) => ({ ...a, kind: 'passeio', total: futureItemTotal(a, 'passeio') })),
+  ], [accommodations, activities]);
+  const futureSchedule = useMemo(() => computeFuturePaymentSchedule(futureItems), [futureItems]);
 
   const destinoBalances = useMemo(() => {
     const raw = computeBalances(destinoExpensesForBalances, members);
@@ -878,7 +892,8 @@ export default function ThailandGroupPlanner() {
               destinoExpenses={destinoExpenses} destinoSchedule={destinoSchedule} destinoBalances={destinoBalances}
               destinoTotal={destinoTotal}
               geralSchedule={geralSchedule} geralBalances={geralBalances} geralSettlements={geralSettlements} geralTotal={geralTotal}
-              activities={activities} onEditActivity={actHandlers.editItem} futureSchedule={futureSchedule}
+              onEditActivity={actHandlers.editItem} onEditAccommodation={accHandlers.editItem}
+              futureItems={futureItems} futureSchedule={futureSchedule}
               futureDone={futureDone} onToggleFutureDone={toggleFutureDone}
               onAdd={addExpense} onEdit={editExpense}
               onRemove={removeExpense} onToggleSplit={toggleSplit} onLog={logChange}
@@ -1561,11 +1576,9 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
               <button onClick={() => setChoosingPayer(true)} className="flex items-center gap-1 text-xs font-medium active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
                 <Wallet size={12} /> Adicionar às despesas
               </button>
-              {type === 'activity' && (
-                <button onClick={() => setChoosingFuturePayment(true)} className="flex items-center gap-1 text-xs font-medium active:opacity-60 transition-opacity" style={{ color: '#7A867F' }}>
-                  <Wallet size={12} /> Pagamento futuro
-                </button>
-              )}
+              <button onClick={() => setChoosingFuturePayment(true)} className="flex items-center gap-1 text-xs font-medium active:opacity-60 transition-opacity" style={{ color: '#7A867F' }}>
+                <Wallet size={12} /> Pagamento futuro
+              </button>
             </div>
           )}
         </div>
@@ -1628,7 +1641,7 @@ function OrcamentoTab({
   expenses, members, itinerary,
   destinoExpenses, destinoSchedule, destinoBalances, destinoTotal,
   geralSchedule, geralBalances, geralSettlements, geralTotal,
-  activities, onEditActivity, futureSchedule, futureDone, onToggleFutureDone,
+  onEditActivity, onEditAccommodation, futureItems, futureSchedule, futureDone, onToggleFutureDone,
   onAdd, onEdit, onRemove, onToggleSplit, onLog,
   paymentStatus, onConfirmPayment, onRemoveProof,
 }) {
@@ -1657,7 +1670,7 @@ function OrcamentoTab({
 
       {section === 'dashboard' && (
         <ResumoSection
-          destinoExpenses={destinoExpenses} expenses={expenses} activities={activities} members={members} itinerary={itinerary}
+          destinoExpenses={destinoExpenses} expenses={expenses} futureItems={futureItems} members={members} itinerary={itinerary}
           destinoTotal={destinoTotal} geralTotal={geralTotal}
           destinoSchedule={destinoSchedule} geralSchedule={geralSchedule} futureSchedule={futureSchedule}
           destinoBalances={destinoBalances} geralBalances={geralBalances}
@@ -1673,18 +1686,17 @@ function OrcamentoTab({
         />
       )}
       {section === 'futuros' && (
-        <FuturosSection activities={activities} schedule={futureSchedule} members={members} onEditActivity={onEditActivity} onLog={onLog}
+        <FuturosSection items={futureItems} schedule={futureSchedule} members={members}
+          onEditActivity={onEditActivity} onEditAccommodation={onEditAccommodation} onLog={onLog}
           futureDone={futureDone} onToggleFutureDone={onToggleFutureDone} />
       )}
     </div>
   );
 }
 
-function FuturosSection({ activities, schedule, members, onEditActivity, onLog, futureDone, onToggleFutureDone }) {
-  const items = activities.filter((a) => a.futurePayment && a.addedToBudget);
-  const grandTotal = items.reduce((sum, a) => sum + (Number(a.pricePerPerson) || 0) * ((a.splitWith && a.splitWith.length) || 0), 0);
-  const [confirmRemoveId, setConfirmRemoveId] = useState(null);
-  const confirmItem = items.find((i) => i.id === confirmRemoveId);
+function FuturosSection({ items, schedule, members, onEditActivity, onEditAccommodation, onLog, futureDone, onToggleFutureDone }) {
+  const grandTotal = items.reduce((sum, a) => sum + (Number(a.total) || 0), 0);
+  const [confirmRemoveTarget, setConfirmRemoveTarget] = useState(null);
 
   const personTotals = useMemo(() => {
     const t = {};
@@ -1707,11 +1719,11 @@ function FuturosSection({ activities, schedule, members, onEditActivity, onLog, 
   }, [schedule]);
   const peopleWithTotals = members.filter((m) => personTotals[m] && (personTotals[m].own > 0 || personTotals[m].pay > 0 || personTotals[m].received > 0));
 
-  function removeFuturePayment(id) {
-    const item = items.find((i) => i.id === id);
-    onEditActivity(id, { futurePayment: false, futurePaymentDate: null, addedToBudget: false, paidBy: null });
-    if (item) onLog(`removeu o pagamento futuro do passeio "${item.name}"`);
-    setConfirmRemoveId(null);
+  function removeFuturePayment(item) {
+    const editFn = item.kind === 'hospedagem' ? onEditAccommodation : onEditActivity;
+    editFn(item.id, { futurePayment: false, futurePaymentDate: null, addedToBudget: false, paidBy: null });
+    onLog(`removeu o pagamento futuro d${item.kind === 'hospedagem' ? 'a hospedagem' : 'o passeio'} "${item.name}"`);
+    setConfirmRemoveTarget(null);
   }
 
   return (
@@ -1735,22 +1747,22 @@ function FuturosSection({ activities, schedule, members, onEditActivity, onLog, 
 
       {items.length === 0 ? (
         <p className="text-sm py-6 text-center" style={{ color: '#96A19C' }}>
-          Nenhum pagamento futuro ainda. Em Destinos, marque um passeio como "Pagamento futuro".
+          Nenhum pagamento futuro ainda. Em Destinos, marque uma hospedagem ou passeio como "Pagamento futuro".
         </p>
       ) : (
         <div className="space-y-2 mb-5">
           {items.map((item) => {
-            const total = (Number(item.pricePerPerson) || 0) * ((item.splitWith && item.splitWith.length) || 0);
+            const total = Number(item.total) || 0;
             return (
-              <div key={item.id} className="rounded-xl px-3.5 py-3 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+              <div key={`${item.kind}-${item.id}`} className="rounded-xl px-3.5 py-3 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm font-medium truncate" style={{ color: INK }}>{item.name}</span>
                   <span className="text-sm font-medium shrink-0" style={{ color: INK }}>R$ {brl(total)}</span>
                 </div>
                 <div className="text-xs mt-0.5" style={{ color: '#7A867F' }}>
-                  {item.city} · {item.paidBy} guarda até {item.futurePaymentDate ? fmtDate(parseISODate(item.futurePaymentDate)) : '—'}
+                  {item.kind === 'hospedagem' ? 'Hospedagem' : 'Passeio'} · {item.city} · {item.paidBy} guarda até {item.futurePaymentDate ? fmtDate(parseISODate(item.futurePaymentDate)) : '—'}
                 </div>
-                <button onClick={() => setConfirmRemoveId(item.id)} className="text-[11px] mt-1.5 active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
+                <button onClick={() => setConfirmRemoveTarget(item)} className="text-[11px] mt-1.5 active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
                   Remover pagamento futuro
                 </button>
               </div>
@@ -1762,11 +1774,11 @@ function FuturosSection({ activities, schedule, members, onEditActivity, onLog, 
       <MonthlySummaryFuturos schedule={schedule} />
 
       <ConfirmDialog
-        open={!!confirmRemoveId}
+        open={!!confirmRemoveTarget}
         title="Remover pagamento futuro?"
-        message={confirmItem ? `"${confirmItem.name}" deixa de ser um pagamento futuro (não sai das despesas).` : ''}
-        onCancel={() => setConfirmRemoveId(null)}
-        onConfirm={() => removeFuturePayment(confirmRemoveId)}
+        message={confirmRemoveTarget ? `"${confirmRemoveTarget.name}" deixa de ser um pagamento futuro (não sai das despesas).` : ''}
+        onCancel={() => setConfirmRemoveTarget(null)}
+        onConfirm={() => removeFuturePayment(confirmRemoveTarget)}
       />
     </div>
   );
@@ -1909,7 +1921,7 @@ function mergeSchedules(a, b) {
 }
 
 function ResumoSection({
-  destinoExpenses, expenses, activities, members, itinerary,
+  destinoExpenses, expenses, futureItems, members, itinerary,
   destinoTotal, geralTotal, destinoSchedule, geralSchedule, futureSchedule, destinoBalances, geralBalances,
   paymentStatus, onConfirmPayment, onRemoveProof,
 }) {
@@ -1929,7 +1941,6 @@ function ResumoSection({
   const settlements = useMemo(() => computeSettlements(balances), [balances]);
   const mergedSchedule = useMemo(() => mergeSchedules(destinoSchedule, geralSchedule), [destinoSchedule, geralSchedule]);
 
-  const futureItems = useMemo(() => activities.filter((a) => a.futurePayment && a.addedToBudget), [activities]);
   const breakdown = useMemo(
     () => computePersonBreakdown(destinoExpenses, expenses, futureItems, members, itinerary),
     [destinoExpenses, expenses, futureItems, members, itinerary]
@@ -1941,12 +1952,13 @@ function ResumoSection({
       const b = breakdown[name] || {};
       const spent = (b.hospedagem || 0) + (b.passeio || 0) + (b.outras || 0);
       const total = spent + (b.futuros || 0) + (b.alimentacao || 0);
-      const passeios_total = (b.passeio || 0) + (b.futuros || 0);
-      t[name] = { ...b, spent, total, passeios_total, net: (b.paid || 0) - spent };
+      const passeios_total = (b.passeio || 0) + (b.futurosPasseio || 0);
+      const hospedagem_total = (b.hospedagem || 0) + (b.futurosHospedagem || 0);
+      t[name] = { ...b, spent, total, passeios_total, hospedagem_total, net: (b.paid || 0) - spent };
     });
     return t;
   }, [breakdown, people]);
-  const futurosTotal = futureItems.reduce((sum, a) => sum + (Number(a.pricePerPerson) || 0) * ((a.splitWith && a.splitWith.length) || 0), 0);
+  const futurosTotal = futureItems.reduce((sum, a) => sum + (Number(a.total) || 0), 0);
   const alimentacaoTotal = people.reduce((sum, name) => sum + (totals[name]?.alimentacao || 0), 0);
   const sortedPeople = [...people].sort((a, b) => totals[b].total - totals[a].total);
 
@@ -2240,7 +2252,7 @@ function TransferLine({ t, name, domain, monthKey, monthLabel, paymentStatus, on
 }
 
 const DASHBOARD_DISPLAY_CATS = [
-  { key: 'hospedagem', label: 'Hospedagem', color: CITY_PALETTE[0] },
+  { key: 'hospedagem_total', label: 'Hospedagem', color: CITY_PALETTE[0] },
   { key: 'passeios_total', label: 'Passeios', color: CITY_PALETTE[1] },
   { key: 'outras', label: 'Outras', color: CITY_PALETTE[2] },
   { key: 'alimentacao', label: 'Alimentação', color: CITY_PALETTE[4] },
