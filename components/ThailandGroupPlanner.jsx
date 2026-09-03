@@ -1674,6 +1674,7 @@ function OrcamentoTab({
           destinoTotal={destinoTotal} geralTotal={geralTotal}
           destinoSchedule={destinoSchedule} geralSchedule={geralSchedule} futureSchedule={futureSchedule}
           destinoBalances={destinoBalances} geralBalances={geralBalances}
+          futureDone={futureDone} onToggleFutureDone={onToggleFutureDone}
           paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof}
         />
       )}
@@ -1738,7 +1739,7 @@ function FuturosSection({ items, schedule, members, onEditActivity, onEditAccomm
           {peopleWithTotals.map((name) => {
             const t = personTotals[name];
             return (
-              <FuturosPersonCard key={name} name={name} schedule={schedule} total={t.own + t.received + t.pay}
+              <FuturosPersonCard key={name} name={name} schedule={schedule} total={t.own + t.received + t.pay} owes={t.pay > 0}
                 futureDone={futureDone} onToggleFutureDone={onToggleFutureDone} />
             );
           })}
@@ -1784,7 +1785,7 @@ function FuturosSection({ items, schedule, members, onEditActivity, onEditAccomm
   );
 }
 
-function FuturosPersonCard({ name, schedule, total, futureDone, onToggleFutureDone }) {
+function FuturosPersonCard({ name, schedule, total, owes, futureDone, onToggleFutureDone }) {
   const [expanded, setExpanded] = useState(false);
   const rows = schedule.filter((m) =>
     (m.guard && m.guard[name] != null) ||
@@ -1807,7 +1808,7 @@ function FuturosPersonCard({ name, schedule, total, futureDone, onToggleFutureDo
             </div>
           )}
         </div>
-        <span className="text-sm font-medium shrink-0" style={{ color: JADE_DARK }}>R$ {brl(total)}</span>
+        <span className="text-sm font-medium shrink-0" style={{ color: owes ? CORAL : JADE_DARK }}>R$ {brl(total)}</span>
         {expanded ? <ChevronUp size={16} className="shrink-0" style={{ color: '#96A19C' }} /> : <ChevronDown size={16} className="shrink-0" style={{ color: '#96A19C' }} />}
       </button>
 
@@ -1923,6 +1924,7 @@ function mergeSchedules(a, b) {
 function ResumoSection({
   destinoExpenses, expenses, futureItems, members, itinerary,
   destinoTotal, geralTotal, destinoSchedule, geralSchedule, futureSchedule, destinoBalances, geralBalances,
+  futureDone, onToggleFutureDone,
   paymentStatus, onConfirmPayment, onRemoveProof,
 }) {
   const grandTotal = destinoTotal + geralTotal;
@@ -1997,6 +1999,7 @@ function ResumoSection({
           {sortedPeople.map((name) => (
             <ResumoPersonCard key={name} name={name} b={totals[name]}
               destinoSchedule={destinoSchedule} geralSchedule={geralSchedule} futureSchedule={futureSchedule}
+              futureDone={futureDone} onToggleFutureDone={onToggleFutureDone}
               paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
           ))}
         </div>
@@ -2025,7 +2028,7 @@ function ResumoSection({
   );
 }
 
-function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSchedule, paymentStatus, onConfirmPayment, onRemoveProof }) {
+function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSchedule, futureDone, onToggleFutureDone, paymentStatus, onConfirmPayment, onRemoveProof }) {
   const [expanded, setExpanded] = useState(false);
   const months = useMemo(() => {
     const map = {};
@@ -2166,7 +2169,8 @@ function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSched
                       {m.futureTransfers.map((t, idx) => (
                         <TransferLine key={idx} t={t} name={name} domain="futuro" monthKey={m.key} monthLabel={monthLabel}
                           paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment}
-                          onPreview={setPreviewUrl} onRequestRemove={setConfirmRemove} />
+                          onPreview={setPreviewUrl} onRequestRemove={setConfirmRemove}
+                          futureDone={futureDone} onToggleFutureDone={onToggleFutureDone} />
                       ))}
                     </div>
                   )}
@@ -2198,7 +2202,7 @@ function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSched
   );
 }
 
-function TransferLine({ t, name, domain, monthKey, monthLabel, paymentStatus, onConfirmPayment, onPreview, onRequestRemove }) {
+function TransferLine({ t, name, domain, monthKey, monthLabel, paymentStatus, onConfirmPayment, onPreview, onRequestRemove, futureDone, onToggleFutureDone }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
   const isPayer = t.from === name;
@@ -2212,6 +2216,9 @@ function TransferLine({ t, name, domain, monthKey, monthLabel, paymentStatus, on
     try {
       const dataUrl = await readAndCompressImage(file);
       await onConfirmPayment(domain, name, monthKey, monthLabel, dataUrl, counterparty);
+      if (domain === 'futuro' && onToggleFutureDone && !(futureDone && futureDone[`${name}__${monthKey}`])) {
+        onToggleFutureDone(name, monthKey, monthLabel);
+      }
     } catch (err) {
       setError('Não deu para processar essa imagem, tenta outra.');
     } finally {
