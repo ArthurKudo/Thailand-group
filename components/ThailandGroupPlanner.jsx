@@ -242,7 +242,7 @@ function activitiesToExpenses(list, scheduled) {
 function computeFuturePaymentSchedule(items) {
   const months = {};
   const now = new Date();
-  const nowStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const nowStart = new Date(now.getFullYear(), now.getMonth(), 1);
   items.forEach((item) => {
     if (!item.futurePayment || !item.futurePaymentDate || !item.paidBy) return;
     const total = Number(item.total) || 0;
