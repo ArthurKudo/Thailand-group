@@ -480,6 +480,29 @@ function ConfirmDialog({ open, title, message, onConfirm, onCancel }) {
   );
 }
 
+function CopyPixButton({ pixKey }) {
+  const [copied, setCopied] = useState(false);
+  if (!pixKey) return null;
+  async function handleCopy(e) {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(pixKey);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Falha ao copiar', err);
+    }
+  }
+  return (
+    <button onClick={handleCopy} title={`Copiar chave Pix: ${pixKey}`}
+      className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full shrink-0 active:opacity-60 transition-opacity"
+      style={{ color: JADE_DARK, background: copied ? JADE_TINT : SAND }}
+    >
+      {copied ? <Check size={10} /> : <Copy size={10} />} {copied ? 'Copiado' : 'Pix'}
+    </button>
+  );
+}
+
 async function loadShared(key, fallback) {
   try {
     const res = await fetch(`/api/state/${key}`);
@@ -517,6 +540,7 @@ export default function ThailandGroupPlanner() {
   const [changeLog, setChangeLog] = useState([]);
   const [paymentStatus, setPaymentStatus] = useState({});
   const [futureDone, setFutureDone] = useState({});
+  const [pixKeys, setPixKeys] = useState({});
   const [syncing, setSyncing] = useState(false);
 
   useEffect(() => {
@@ -525,7 +549,7 @@ export default function ThailandGroupPlanner() {
         const personal = window.localStorage.getItem('my-name');
         if (personal) setMyName(personal);
       } catch {}
-      const [m, it, ac, at, ex, cc, cl, ps, fd] = await Promise.all([
+      const [m, it, ac, at, ex, cc, cl, ps, fd, pk] = await Promise.all([
         loadShared('members', []),
         loadShared('itinerary', DEFAULT_ITINERARY),
         loadShared('accommodations', []),
@@ -535,6 +559,7 @@ export default function ThailandGroupPlanner() {
         loadShared('changeLog', []),
         loadShared('paymentStatus', {}),
         loadShared('futureDone', {}),
+        loadShared('pixKeys', {}),
       ]);
       setMembers(m);
       setItinerary(it);
@@ -545,13 +570,14 @@ export default function ThailandGroupPlanner() {
       setChangeLog(cl);
       setPaymentStatus(ps);
       setFutureDone(fd);
+      setPixKeys(pk);
       setBooting(false);
     })();
   }, []);
 
   const refreshShared = useCallback(async () => {
     setSyncing(true);
-    const [m, it, ac, at, ex, cc, cl, ps, fd] = await Promise.all([
+    const [m, it, ac, at, ex, cc, cl, ps, fd, pk] = await Promise.all([
       loadShared('members', []),
       loadShared('itinerary', DEFAULT_ITINERARY),
       loadShared('accommodations', []),
@@ -561,6 +587,7 @@ export default function ThailandGroupPlanner() {
       loadShared('changeLog', []),
       loadShared('paymentStatus', {}),
       loadShared('futureDone', {}),
+      loadShared('pixKeys', {}),
     ]);
     setMembers(m);
     setItinerary(it);
@@ -571,6 +598,7 @@ export default function ThailandGroupPlanner() {
     setChangeLog(cl);
     setPaymentStatus(ps);
     setFutureDone(fd);
+    setPixKeys(pk);
     setSyncing(false);
   }, []);
 
@@ -612,6 +640,13 @@ export default function ThailandGroupPlanner() {
     logChange(next[key]
       ? `marcou o pagamento futuro de ${name} em ${monthLabel} como feito`
       : `desmarcou o pagamento futuro de ${name} em ${monthLabel}`);
+  }
+
+  async function setPixKey(name, key) {
+    const next = { ...pixKeys, [name]: key };
+    setPixKeys(next);
+    await saveShared('pixKeys', next);
+    logChange(key ? `atualizou a chave Pix de ${name}` : `removeu a chave Pix de ${name}`);
   }
 
   async function setCityColor(city, paletteIndex) {
@@ -895,6 +930,7 @@ export default function ThailandGroupPlanner() {
               onEditActivity={actHandlers.editItem} onEditAccommodation={accHandlers.editItem}
               futureItems={futureItems} futureSchedule={futureSchedule}
               futureDone={futureDone} onToggleFutureDone={toggleFutureDone}
+              pixKeys={pixKeys} onSetPixKey={setPixKey}
               onAdd={addExpense} onEdit={editExpense}
               onRemove={removeExpense} onToggleSplit={toggleSplit} onLog={logChange}
               paymentStatus={paymentStatus} onConfirmPayment={confirmPayment} onRemoveProof={removeProof}
@@ -1642,6 +1678,7 @@ function OrcamentoTab({
   destinoExpenses, destinoSchedule, destinoBalances, destinoTotal,
   geralSchedule, geralBalances, geralSettlements, geralTotal,
   onEditActivity, onEditAccommodation, futureItems, futureSchedule, futureDone, onToggleFutureDone,
+  pixKeys, onSetPixKey,
   onAdd, onEdit, onRemove, onToggleSplit, onLog,
   paymentStatus, onConfirmPayment, onRemoveProof,
 }) {
@@ -1675,6 +1712,7 @@ function OrcamentoTab({
           destinoSchedule={destinoSchedule} geralSchedule={geralSchedule} futureSchedule={futureSchedule}
           destinoBalances={destinoBalances} geralBalances={geralBalances}
           futureDone={futureDone} onToggleFutureDone={onToggleFutureDone}
+          pixKeys={pixKeys} onSetPixKey={onSetPixKey}
           paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof}
         />
       )}
@@ -1683,19 +1721,21 @@ function OrcamentoTab({
           expenses={expenses} totalSpent={geralTotal}
           balances={geralBalances} settlements={geralSettlements} schedule={geralSchedule}
           members={members} onAdd={onAdd} onEdit={onEdit} onRemove={onRemove} onToggleSplit={onToggleSplit} onLog={onLog}
+          pixKeys={pixKeys}
           paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof}
         />
       )}
       {section === 'futuros' && (
         <FuturosSection items={futureItems} schedule={futureSchedule} members={members}
           onEditActivity={onEditActivity} onEditAccommodation={onEditAccommodation} onLog={onLog}
+          pixKeys={pixKeys}
           futureDone={futureDone} onToggleFutureDone={onToggleFutureDone} />
       )}
     </div>
   );
 }
 
-function FuturosSection({ items, schedule, members, onEditActivity, onEditAccommodation, onLog, futureDone, onToggleFutureDone }) {
+function FuturosSection({ items, schedule, members, onEditActivity, onEditAccommodation, onLog, pixKeys, futureDone, onToggleFutureDone }) {
   const grandTotal = items.reduce((sum, a) => sum + (Number(a.total) || 0), 0);
   const [confirmRemoveTarget, setConfirmRemoveTarget] = useState(null);
 
@@ -1772,7 +1812,7 @@ function FuturosSection({ items, schedule, members, onEditActivity, onEditAccomm
         </div>
       )}
 
-      <MonthlySummaryFuturos schedule={schedule} />
+      <MonthlySummaryFuturos schedule={schedule} pixKeys={pixKeys} />
 
       <ConfirmDialog
         open={!!confirmRemoveTarget}
@@ -1851,7 +1891,7 @@ function FuturosPersonCard({ name, schedule, total, owes, futureDone, onToggleFu
   );
 }
 
-function MonthlySummaryFuturos({ schedule }) {
+function MonthlySummaryFuturos({ schedule, pixKeys }) {
   const [expanded, setExpanded] = useState(true);
   if (!schedule.length) return null;
   const grandTotal = schedule.reduce((sum, m) => sum + m.total, 0);
@@ -1890,6 +1930,7 @@ function MonthlySummaryFuturos({ schedule }) {
                       <span className="font-medium">{t.from}</span>
                       <ChevronRight size={11} style={{ color: '#B7C1BC' }} />
                       <span className="font-medium">{t.to}</span>
+                      <CopyPixButton pixKey={pixKeys?.[t.to]} />
                       <span className="ml-auto">Pix R$ {brl(t.amount)}</span>
                     </div>
                   ))}
@@ -1921,10 +1962,52 @@ function mergeSchedules(a, b) {
   return Object.values(map).sort((x, y) => x.key.localeCompare(y.key));
 }
 
+function PixKeysPanel({ members, pixKeys, onSetPixKey }) {
+  const [expanded, setExpanded] = useState(false);
+  const filledCount = members.filter((m) => pixKeys?.[m]).length;
+
+  return (
+    <div className="rounded-xl px-4 py-3 mb-4 shadow-sm" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+      <button onClick={() => setExpanded((v) => !v)} className="w-full flex items-center justify-between text-left active:opacity-70 transition-opacity">
+        <div>
+          <div className="text-xs font-medium uppercase tracking-wide" style={{ color: '#8A968E' }}>Chaves Pix</div>
+          <div className="text-xs mt-0.5" style={{ color: '#96A19C' }}>
+            {filledCount}/{members.length} cadastrada{filledCount === 1 ? '' : 's'}
+          </div>
+        </div>
+        {expanded ? <ChevronUp size={16} className="shrink-0" style={{ color: '#96A19C' }} /> : <ChevronDown size={16} className="shrink-0" style={{ color: '#96A19C' }} />}
+      </button>
+
+      {expanded && (
+        <div className="space-y-2 mt-3">
+          {members.map((name) => (
+            <PixKeyRow key={name} name={name} value={pixKeys?.[name]} onSave={onSetPixKey} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PixKeyRow({ name, value, onSave }) {
+  const [text, setText] = useState(value || '');
+  useEffect(() => { setText(value || ''); }, [value]);
+  return (
+    <div className="flex items-center gap-2">
+      <span className="text-sm w-16 shrink-0 truncate" style={{ color: '#4A5651' }}>{name}</span>
+      <input value={text} onChange={(e) => setText(e.target.value)}
+        onBlur={() => { const trimmed = text.trim(); if (trimmed !== (value || '')) onSave(name, trimmed); }}
+        placeholder="chave Pix (CPF, e-mail, telefone...)"
+        className="flex-1 text-xs rounded-lg px-2.5 py-1.5 outline-none" style={{ border: `1px solid ${LINE}`, background: SAND, color: INK }} />
+      <CopyPixButton pixKey={value} />
+    </div>
+  );
+}
+
 function ResumoSection({
   destinoExpenses, expenses, futureItems, members, itinerary,
   destinoTotal, geralTotal, destinoSchedule, geralSchedule, futureSchedule, destinoBalances, geralBalances,
-  futureDone, onToggleFutureDone,
+  futureDone, onToggleFutureDone, pixKeys, onSetPixKey,
   paymentStatus, onConfirmPayment, onRemoveProof,
 }) {
   const grandTotal = destinoTotal + geralTotal;
@@ -1990,7 +2073,9 @@ function ResumoSection({
         </div>
       )}
 
-      <MonthlySummary schedule={mergedSchedule} />
+      <PixKeysPanel members={people} pixKeys={pixKeys} onSetPixKey={onSetPixKey} />
+
+      <MonthlySummary schedule={mergedSchedule} pixKeys={pixKeys} />
 
       {people.length === 0 ? (
         <p className="text-sm py-6 text-center" style={{ color: '#96A19C' }}>Nenhuma pessoa no grupo ainda.</p>
@@ -1999,7 +2084,7 @@ function ResumoSection({
           {sortedPeople.map((name) => (
             <ResumoPersonCard key={name} name={name} b={totals[name]}
               destinoSchedule={destinoSchedule} geralSchedule={geralSchedule} futureSchedule={futureSchedule}
-              futureDone={futureDone} onToggleFutureDone={onToggleFutureDone}
+              futureDone={futureDone} onToggleFutureDone={onToggleFutureDone} pixKeys={pixKeys}
               paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
           ))}
         </div>
@@ -2014,6 +2099,7 @@ function ResumoSection({
                 <span className="font-medium">{s.from}</span>
                 <ChevronRight size={13} style={{ color: '#B7C1BC' }} />
                 <span className="font-medium">{s.to}</span>
+                <CopyPixButton pixKey={pixKeys?.[s.to]} />
                 <span className="ml-auto" style={{ color: '#96A19C' }}>R$ {brl(s.amount)}</span>
               </div>
             ))}
@@ -2028,7 +2114,7 @@ function ResumoSection({
   );
 }
 
-function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSchedule, futureDone, onToggleFutureDone, paymentStatus, onConfirmPayment, onRemoveProof }) {
+function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSchedule, futureDone, onToggleFutureDone, pixKeys, paymentStatus, onConfirmPayment, onRemoveProof }) {
   const [expanded, setExpanded] = useState(false);
   const months = useMemo(() => {
     const map = {};
@@ -2156,7 +2242,7 @@ function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSched
                     <div className="space-y-1.5 mb-1">
                       {transfers.map((t, idx) => (
                         <TransferLine key={idx} t={t} name={name} domain="total" monthKey={m.key} monthLabel={monthLabel}
-                          paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment}
+                          paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} pixKeys={pixKeys}
                           onPreview={setPreviewUrl} onRequestRemove={setConfirmRemove} />
                       ))}
                     </div>
@@ -2168,7 +2254,7 @@ function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSched
                       </div>
                       {m.futureTransfers.map((t, idx) => (
                         <TransferLine key={idx} t={t} name={name} domain="futuro" monthKey={m.key} monthLabel={monthLabel}
-                          paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment}
+                          paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} pixKeys={pixKeys}
                           onPreview={setPreviewUrl} onRequestRemove={setConfirmRemove}
                           futureDone={futureDone} onToggleFutureDone={onToggleFutureDone} />
                       ))}
@@ -2202,7 +2288,7 @@ function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSched
   );
 }
 
-function TransferLine({ t, name, domain, monthKey, monthLabel, paymentStatus, onConfirmPayment, onPreview, onRequestRemove, futureDone, onToggleFutureDone }) {
+function TransferLine({ t, name, domain, monthKey, monthLabel, paymentStatus, onConfirmPayment, onPreview, onRequestRemove, futureDone, onToggleFutureDone, pixKeys }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
   const isPayer = t.from === name;
@@ -2231,6 +2317,7 @@ function TransferLine({ t, name, domain, monthKey, monthLabel, paymentStatus, on
       <div className="flex items-center gap-1.5 text-xs" style={{ color: isPayer ? CORAL : JADE_DARK }}>
         <span>{isPayer ? 'Você paga pra' : 'Você recebe de'}</span>
         <span className="font-medium">{counterparty}</span>
+        {isPayer && <CopyPixButton pixKey={pixKeys?.[counterparty]} />}
         <span className="ml-auto font-medium">R$ {brl(t.amount)}</span>
       </div>
       {isPayer && (
@@ -2265,7 +2352,7 @@ const DASHBOARD_DISPLAY_CATS = [
   { key: 'alimentacao', label: 'Alimentação', color: CITY_PALETTE[4] },
 ];
 
-function GeralSection({ expenses, totalSpent, balances, settlements, schedule, members, onAdd, onEdit, onRemove, onToggleSplit, onLog, paymentStatus, onConfirmPayment, onRemoveProof }) {
+function GeralSection({ expenses, totalSpent, balances, settlements, schedule, members, onAdd, onEdit, onRemove, onToggleSplit, onLog, pixKeys, paymentStatus, onConfirmPayment, onRemoveProof }) {
   const [confirmExpenseId, setConfirmExpenseId] = useState(null);
   const confirmExpense = expenses.find((e) => e.id === confirmExpenseId);
 
@@ -2277,6 +2364,7 @@ function GeralSection({ expenses, totalSpent, balances, settlements, schedule, m
       </div>
 
       <BalancesPanel domain="geral" balances={balances} settlements={settlements} schedule={schedule} members={members}
+        pixKeys={pixKeys}
         paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
 
       <div className="space-y-3 mt-1">
@@ -2363,12 +2451,12 @@ function GeralSection({ expenses, totalSpent, balances, settlements, schedule, m
   );
 }
 
-function BalancesPanel({ domain, balances, settlements, schedule, members, paymentStatus, onConfirmPayment, onRemoveProof }) {
+function BalancesPanel({ domain, balances, settlements, schedule, members, pixKeys, paymentStatus, onConfirmPayment, onRemoveProof }) {
   const [personModal, setPersonModal] = useState(null);
 
   return (
     <>
-      <MonthlySummary schedule={schedule} />
+      <MonthlySummary schedule={schedule} pixKeys={pixKeys} />
 
       {members.length > 0 && (
         <div className="grid grid-cols-2 gap-2 mb-4">
@@ -2398,6 +2486,7 @@ function BalancesPanel({ domain, balances, settlements, schedule, members, payme
                 <span className="font-medium">{s.from}</span>
                 <ChevronRight size={13} style={{ color: '#B7C1BC' }} />
                 <span className="font-medium">{s.to}</span>
+                <CopyPixButton pixKey={pixKeys?.[s.to]} />
                 <span className="ml-auto" style={{ color: '#96A19C' }}>R$ {brl(s.amount)}</span>
               </div>
             ))}
@@ -2407,13 +2496,14 @@ function BalancesPanel({ domain, balances, settlements, schedule, members, payme
 
       {personModal && (
         <PersonMonthlyModal domain={domain} name={personModal} schedule={schedule} onClose={() => setPersonModal(null)}
+          pixKeys={pixKeys}
           paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
       )}
     </>
   );
 }
 
-function PersonMonthlyModal({ domain, name, schedule, onClose, paymentStatus, onConfirmPayment, onRemoveProof }) {
+function PersonMonthlyModal({ domain, name, schedule, onClose, pixKeys, paymentStatus, onConfirmPayment, onRemoveProof }) {
   const rows = schedule.filter((m) => m.perPerson[name] != null
     || Object.values(m.pairwise || {}).some((creditors) => creditors[name] != null));
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -2468,6 +2558,7 @@ function PersonMonthlyModal({ domain, name, schedule, onClose, paymentStatus, on
                         <div key={idx} className="flex items-center gap-1.5 text-xs" style={{ color: t.from === name ? CORAL : JADE_DARK }}>
                           <span>{t.from === name ? 'Você paga pra' : 'Você recebe de'}</span>
                           <span className="font-medium">{t.from === name ? t.to : t.from}</span>
+                          {t.from === name && <CopyPixButton pixKey={pixKeys?.[t.to]} />}
                           <span className="ml-auto font-medium">R$ {brl(t.amount)}</span>
                         </div>
                       ))}
@@ -2544,7 +2635,7 @@ function LogsTab({ changeLog }) {
   );
 }
 
-function MonthlySummary({ schedule }) {
+function MonthlySummary({ schedule, pixKeys }) {
   const [copied, setCopied] = useState(false);
   const [expanded, setExpanded] = useState(false);
 
@@ -2621,6 +2712,7 @@ function MonthlySummary({ schedule }) {
                           <span className="font-medium">{t.from}</span>
                           <ChevronRight size={11} style={{ color: '#B7C1BC' }} />
                           <span className="font-medium">{t.to}</span>
+                          <CopyPixButton pixKey={pixKeys?.[t.to]} />
                           <span className="ml-auto">Pix R$ {brl(t.amount)}</span>
                         </div>
                       ))}
