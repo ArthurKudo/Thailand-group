@@ -43,6 +43,7 @@ const CITY_PALETTE = [
 
 const TRIP_START = new Date(2027, 1, 8); // 08/02/2027
 const FERIAS_DEADLINE = new Date(2027, 2, 2); // 02/03/2027
+const FUTURE_PAYMENT_START = new Date(2026, 8, 1); // 1ª parcela dos pagamentos futuros: set/2026 (fixo, não desliza com a data de hoje)
 
 const MONTHS_PT = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
 const MONTHS_FULL_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
@@ -241,8 +242,7 @@ function activitiesToExpenses(list, scheduled) {
 }
 function computeFuturePaymentSchedule(items) {
   const months = {};
-  const now = new Date();
-  const nowStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const nowStart = FUTURE_PAYMENT_START;
   items.forEach((item) => {
     if (!item.futurePayment || !item.futurePaymentDate || !item.paidBy) return;
     const total = Number(item.total) || 0;
