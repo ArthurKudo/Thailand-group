@@ -266,20 +266,62 @@ function activitiesToExpenses(list, scheduled) {
     return [base, ...paidBeforeFutureExpense(item, base)];
   });
 }
+function futurePaymentPlan(item) {
+  if (!item.futurePayment || !item.futurePaymentDate || !item.paidBy) return null;
+  const total = Number(item.total) || 0;
+  if (!total) return null;
+  const [sy, sm] = (item.futurePaymentStart || '').split('-').map(Number);
+  const itemStart = sy && sm ? new Date(sy, sm - 1, 1) : FUTURE_PAYMENT_START;
+  const nowStart = itemStart > FUTURE_PAYMENT_START ? itemStart : FUTURE_PAYMENT_START;
+  const [dy, dm] = item.futurePaymentDate.split('-').map(Number);
+  if (!dy || !dm) return null;
+  const deadlineStart = new Date(dy, dm - 1, 1);
+  const count = Math.max(1, (deadlineStart.getFullYear() - nowStart.getFullYear()) * 12 + (deadlineStart.getMonth() - nowStart.getMonth()) + 1);
+  return { total, nowStart, count };
+}
+function monthKeyOf(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+function buildPixLedger(regularExpenses, futureItems) {
+  const entries = [];
+  regularExpenses.forEach((e) => {
+    if (!e.purchaseDate || !e.paidBy) return;
+    const split = e.splitWith && e.splitWith.length ? e.splitWith : [];
+    if (!split.length) return;
+    const installments = Math.max(1, Number(e.installments || 1));
+    const perPerson = Number(e.amount || 0) / installments / split.length;
+    const [y, m] = e.purchaseDate.split('-').map(Number);
+    const label = e.description.replace(/^(Hospedagem|Passeio): /, '');
+    for (let i = 0; i < installments; i++) {
+      const d = new Date(y, m + i, 1);
+      split.forEach((name) => {
+        if (name === e.paidBy) return;
+        entries.push({ key: monthKeyOf(d), from: name, to: e.paidBy, amount: perPerson, label, kind: 'normal', installment: i + 1, installments });
+      });
+    }
+  });
+  futureItems.forEach((item) => {
+    const plan = futurePaymentPlan(item);
+    if (!plan) return;
+    const split = item.splitWith && item.splitWith.length ? item.splitWith : [];
+    if (!split.length) return;
+    const perPerson = plan.total / plan.count / split.length;
+    for (let i = 0; i < plan.count; i++) {
+      const d = new Date(plan.nowStart.getFullYear(), plan.nowStart.getMonth() + i, 1);
+      split.forEach((name) => {
+        if (name === item.paidBy) return;
+        entries.push({ key: monthKeyOf(d), from: name, to: item.paidBy, amount: perPerson, label: item.name, kind: 'futuro', installment: i + 1, installments: plan.count });
+      });
+    }
+  });
+  return entries;
+}
 function computeFuturePaymentSchedule(items) {
   const months = {};
   items.forEach((item) => {
-    if (!item.futurePayment || !item.futurePaymentDate || !item.paidBy) return;
-    const total = Number(item.total) || 0;
-    if (!total) return;
-    const [sy, sm] = (item.futurePaymentStart || '').split('-').map(Number);
-    const itemStart = sy && sm ? new Date(sy, sm - 1, 1) : FUTURE_PAYMENT_START;
-    const nowStart = itemStart > FUTURE_PAYMENT_START ? itemStart : FUTURE_PAYMENT_START;
-    const [dy, dm] = item.futurePaymentDate.split('-').map(Number);
-    if (!dy || !dm) return;
-    const deadlineStart = new Date(dy, dm - 1, 1);
-    let count = (deadlineStart.getFullYear() - nowStart.getFullYear()) * 12 + (deadlineStart.getMonth() - nowStart.getMonth()) + 1;
-    count = Math.max(1, count);
+    const plan = futurePaymentPlan(item);
+    if (!plan) return;
+    const { total, nowStart, count } = plan;
     const split = item.splitWith && item.splitWith.length ? item.splitWith : [];
     const perInstallment = total / count;
     const perPersonPerInstallment = split.length ? perInstallment / split.length : 0;
@@ -645,7 +687,7 @@ export default function ThailandGroupPlanner() {
     const next = { ...paymentStatus, [key]: { paid: true, proof: proofDataUrl, confirmedBy: myName, confirmedAt: Date.now() } };
     setPaymentStatus(next);
     await saveShared('paymentStatus', next);
-    const domainLabel = domain === 'viagem' ? 'viagem' : domain === 'geral' ? 'despesa geral' : domain === 'futuro' ? 'pix futuro' : 'total';
+    const domainLabel = domain === 'viagem' ? 'viagem' : domain === 'geral' ? 'despesa geral' : domain === 'futuro' ? 'pix futuro' : domain === 'saldo' ? 'pix único' : 'total';
     logChange(counterparty
       ? `anexou comprovante do pix de ${name} pra ${counterparty} em ${monthLabel} (${domainLabel})`
       : `anexou comprovante e marcou o pagamento de ${name} em ${monthLabel} (${domainLabel}) como pago`);
@@ -821,6 +863,10 @@ export default function ThailandGroupPlanner() {
     ...activities.filter((a) => a.futurePayment && a.addedToBudget).map((a) => ({ ...a, kind: 'passeio', total: futureItemTotal(a, 'passeio') })),
   ], [accommodations, activities]);
   const futureSchedule = useMemo(() => computeFuturePaymentSchedule(futureItems), [futureItems]);
+  const pixLedger = useMemo(
+    () => buildPixLedger([...destinoExpensesForBalances, ...expenses.map((e) => ({ ...e, description: e.description || 'Gasto' }))], futureItems),
+    [destinoExpensesForBalances, expenses, futureItems]
+  );
 
   const destinoBalances = useMemo(() => {
     const raw = computeBalances(destinoExpensesForBalances, members);
@@ -947,7 +993,7 @@ export default function ThailandGroupPlanner() {
               destinoTotal={destinoTotal}
               geralSchedule={geralSchedule} geralBalances={geralBalances} geralSettlements={geralSettlements} geralTotal={geralTotal}
               onEditActivity={actHandlers.editItem} onEditAccommodation={accHandlers.editItem}
-              futureItems={futureItems} futureSchedule={futureSchedule}
+              futureItems={futureItems} futureSchedule={futureSchedule} pixLedger={pixLedger}
               futureDone={futureDone} onToggleFutureDone={toggleFutureDone}
               pixKeys={pixKeys} onSetPixKey={setPixKey}
               onAdd={addExpense} onEdit={editExpense}
@@ -1754,7 +1800,7 @@ function OrcamentoTab({
   expenses, members, itinerary,
   destinoExpenses, destinoSchedule, destinoBalances, destinoTotal,
   geralSchedule, geralBalances, geralSettlements, geralTotal,
-  onEditActivity, onEditAccommodation, futureItems, futureSchedule, futureDone, onToggleFutureDone,
+  onEditActivity, onEditAccommodation, futureItems, futureSchedule, pixLedger, futureDone, onToggleFutureDone,
   pixKeys, onSetPixKey,
   onAdd, onEdit, onRemove, onToggleSplit, onLog,
   paymentStatus, onConfirmPayment, onRemoveProof,
@@ -1786,7 +1832,7 @@ function OrcamentoTab({
         <ResumoSection
           destinoExpenses={destinoExpenses} expenses={expenses} futureItems={futureItems} members={members} itinerary={itinerary}
           destinoTotal={destinoTotal} geralTotal={geralTotal}
-          destinoSchedule={destinoSchedule} geralSchedule={geralSchedule} futureSchedule={futureSchedule}
+          destinoSchedule={destinoSchedule} geralSchedule={geralSchedule} futureSchedule={futureSchedule} pixLedger={pixLedger}
           destinoBalances={destinoBalances} geralBalances={geralBalances}
           futureDone={futureDone} onToggleFutureDone={onToggleFutureDone}
           pixKeys={pixKeys} onSetPixKey={onSetPixKey}
@@ -2085,7 +2131,7 @@ function PixKeyRow({ name, value, onSave }) {
 
 function ResumoSection({
   destinoExpenses, expenses, futureItems, members, itinerary,
-  destinoTotal, geralTotal, destinoSchedule, geralSchedule, futureSchedule, destinoBalances, geralBalances,
+  destinoTotal, geralTotal, destinoSchedule, geralSchedule, futureSchedule, pixLedger, destinoBalances, geralBalances,
   futureDone, onToggleFutureDone, pixKeys, onSetPixKey,
   paymentStatus, onConfirmPayment, onRemoveProof,
 }) {
@@ -2162,7 +2208,7 @@ function ResumoSection({
         <div className="space-y-2 mb-4">
           {sortedPeople.map((name) => (
             <ResumoPersonCard key={name} name={name} b={totals[name]}
-              destinoSchedule={destinoSchedule} geralSchedule={geralSchedule} futureSchedule={futureSchedule}
+              destinoSchedule={destinoSchedule} geralSchedule={geralSchedule} futureSchedule={futureSchedule} pixLedger={pixLedger}
               futureDone={futureDone} onToggleFutureDone={onToggleFutureDone} pixKeys={pixKeys}
               paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} onRemoveProof={onRemoveProof} />
           ))}
@@ -2193,43 +2239,46 @@ function ResumoSection({
   );
 }
 
-function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSchedule, futureDone, onToggleFutureDone, pixKeys, paymentStatus, onConfirmPayment, onRemoveProof }) {
+function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSchedule, pixLedger, futureDone, onToggleFutureDone, pixKeys, paymentStatus, onConfirmPayment, onRemoveProof }) {
   const [expanded, setExpanded] = useState(false);
   const months = useMemo(() => {
     const map = {};
-    function ensure(m) {
-      if (!map[m.key]) map[m.key] = { key: m.key, year: m.year, month: m.month, total: 0, parts: [], pairwise: {}, futureTransfers: [] };
-      return map[m.key];
+    function ensure(key) {
+      if (!map[key]) {
+        const [y, m] = key.split('-').map(Number);
+        map[key] = { key, year: y, month: m - 1, parts: [], pairs: {} };
+      }
+      return map[key];
     }
     function addPart(schedule, domain, domainLabel) {
-      schedule.forEach((m) => {
+      (schedule || []).forEach((m) => {
         const amount = m.perPerson[name];
-        const isCreditorHere = Object.values(m.pairwise || {}).some((creditors) => creditors[name] != null);
-        if (amount == null && !isCreditorHere) return;
-        const row = ensure(m);
-        if (amount != null) {
-          row.total += amount;
-          row.parts.push({ domain, domainLabel, amount });
-        }
-        Object.entries(m.pairwise || {}).forEach(([debtor, creditors]) => {
-          if (!row.pairwise[debtor]) row.pairwise[debtor] = {};
-          Object.entries(creditors).forEach(([creditor, amt]) => {
-            row.pairwise[debtor][creditor] = (row.pairwise[debtor][creditor] || 0) + amt;
-          });
-        });
+        if (!amount) return;
+        ensure(m.key).parts.push({ domain, domainLabel, amount });
       });
     }
     addPart(destinoSchedule, 'viagem', 'Viagem');
     addPart(geralSchedule, 'geral', 'Outras');
+    addPart(futureSchedule, 'futuro', 'Futuros');
 
-    (futureSchedule || []).forEach((m) => {
-      const transfers = netPairwiseSettlements(m.pairwise).filter((t) => t.from === name || t.to === name);
-      if (transfers.length === 0) return;
-      ensure(m).futureTransfers = transfers;
+    (pixLedger || []).forEach((e) => {
+      if (e.from !== name && e.to !== name) return;
+      const counterparty = e.from === name ? e.to : e.from;
+      const row = ensure(e.key);
+      if (!row.pairs[counterparty]) row.pairs[counterparty] = { counterparty, owe: [], owed: [], net: 0 };
+      const pair = row.pairs[counterparty];
+      if (e.from === name) { pair.owe.push(e); pair.net -= e.amount; }
+      else { pair.owed.push(e); pair.net += e.amount; }
     });
 
-    return Object.values(map).sort((a, b) => a.key.localeCompare(b.key));
-  }, [destinoSchedule, geralSchedule, futureSchedule, name]);
+    return Object.values(map)
+      .map((row) => ({
+        ...row,
+        total: row.parts.reduce((s, p) => s + p.amount, 0),
+        pairList: Object.values(row.pairs).sort((a, b) => a.net - b.net),
+      }))
+      .sort((a, b) => a.key.localeCompare(b.key));
+  }, [destinoSchedule, geralSchedule, futureSchedule, pixLedger, name]);
 
   const [previewUrl, setPreviewUrl] = useState(null);
   const [confirmRemove, setConfirmRemove] = useState(null);
@@ -2289,59 +2338,44 @@ function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSched
           ) : (
             <div className="space-y-2 pt-2">
               {months.map((m) => {
-              const monthLabel = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
-              const transfers = netPairwiseSettlements(m.pairwise).filter((t) => t.from === name || t.to === name);
-              const net = transfers.reduce((s, t) => s + (t.to === name ? t.amount : -t.amount), 0);
-              const futurePay = m.futureTransfers.filter((t) => t.from === name).reduce((s, t) => s + t.amount, 0);
-              const addends = [...m.parts.map((p) => p.amount), ...(futurePay > 0 ? [futurePay] : [])];
-              const monthTotal = m.total + futurePay;
-              return (
-                <div key={m.key} className="rounded-lg px-3 py-2" style={{ background: SAND }}>
-                  <div className="flex items-center justify-between text-sm mb-1">
-                    <span style={{ color: '#4A5651' }}>{monthLabel}</span>
-                    <span className="font-medium" style={{ color: net >= 0 ? JADE_DARK : CORAL }}>
-                      {net >= 0 ? '+' : '-'}R$ {brl(Math.abs(net))}
-                    </span>
-                  </div>
-                  <div className="space-y-0.5 mb-1.5">
-                    {m.parts.map((p) => (
-                      <div key={p.domain} className="flex items-center justify-between text-[11px]" style={{ color: '#96A19C' }}>
-                        <span>{p.domainLabel}</span>
-                        <span>R$ {brl(p.amount)}</span>
-                      </div>
-                    ))}
-                  </div>
-                  {monthTotal > 0 && (
-                    <div className="flex items-center justify-between text-[11px] font-medium mb-1.5 pt-1" style={{ color: INK, borderTop: `1px dashed ${LINE}` }}>
-                      <span>Total do mês{addends.length > 1 ? ` (${addends.map((a) => brl(a)).join(' + ')})` : ''}</span>
-                      <span>R$ {brl(monthTotal)}</span>
+                const monthLabel = `${MONTHS_FULL_PT[m.month]} de ${m.year}`;
+                const net = m.pairList.reduce((s, p) => s + p.net, 0);
+                return (
+                  <div key={m.key} className="rounded-lg px-3 py-2" style={{ background: SAND }}>
+                    <div className="flex items-center justify-between text-sm mb-1">
+                      <span style={{ color: '#4A5651' }}>{monthLabel}</span>
+                      <span className="font-medium" style={{ color: net >= 0 ? JADE_DARK : CORAL }}>
+                        {net >= 0 ? '+' : '-'}R$ {brl(Math.abs(net))}
+                      </span>
                     </div>
-                  )}
-                  {transfers.length > 0 && (
-                    <div className="space-y-1.5 mb-1">
-                      {transfers.map((t, idx) => (
-                        <TransferLine key={idx} t={t} name={name} domain="total" monthKey={m.key} monthLabel={monthLabel}
-                          paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} pixKeys={pixKeys}
-                          onPreview={setPreviewUrl} onRequestRemove={setConfirmRemove} />
+                    <div className="space-y-0.5 mb-1.5">
+                      {m.parts.map((p) => (
+                        <div key={p.domain} className="flex items-center justify-between text-[11px]" style={{ color: '#96A19C' }}>
+                          <span>{p.domainLabel}</span>
+                          <span>R$ {brl(p.amount)}</span>
+                        </div>
                       ))}
                     </div>
-                  )}
-                  {m.futureTransfers.length > 0 && (
-                    <div className="space-y-1.5 mt-1.5 pt-1.5" style={{ borderTop: `1px dashed ${LINE}` }}>
-                      <div className="text-[10px] uppercase tracking-wide" style={{ color: GOLD }}>
-                        Pix futuro (lembrete, não entra no saldo)
+                    {m.total > 0 && (
+                      <div className="flex items-center justify-between text-[11px] font-medium mb-1.5 pt-1" style={{ color: INK, borderTop: `1px dashed ${LINE}` }}>
+                        <span>Total do mês{m.parts.length > 1 ? ` (${m.parts.map((p) => brl(p.amount)).join(' + ')})` : ''}</span>
+                        <span>R$ {brl(m.total)}</span>
                       </div>
-                      {m.futureTransfers.map((t, idx) => (
-                        <TransferLine key={idx} t={t} name={name} domain="futuro" monthKey={m.key} monthLabel={monthLabel}
-                          paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} pixKeys={pixKeys}
-                          onPreview={setPreviewUrl} onRequestRemove={setConfirmRemove}
-                          futureDone={futureDone} onToggleFutureDone={onToggleFutureDone} />
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+                    )}
+                    {m.pairList.length > 0 && (
+                      <div className="space-y-1.5 pt-1.5" style={{ borderTop: `1px dashed ${LINE}` }}>
+                        <div className="text-[10px] uppercase tracking-wide" style={{ color: '#8A968E' }}>Pix do mês (já com o saldo) · toque para ver o porquê</div>
+                        {m.pairList.map((pair) => (
+                          <PixPairLine key={pair.counterparty} pair={pair} name={name} monthKey={m.key} monthLabel={monthLabel}
+                            paymentStatus={paymentStatus} onConfirmPayment={onConfirmPayment} pixKeys={pixKeys}
+                            onPreview={setPreviewUrl} onRequestRemove={setConfirmRemove}
+                            futureDone={futureDone} onToggleFutureDone={onToggleFutureDone} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -2367,12 +2401,32 @@ function ResumoPersonCard({ name, b, destinoSchedule, geralSchedule, futureSched
   );
 }
 
-function TransferLine({ t, name, domain, monthKey, monthLabel, paymentStatus, onConfirmPayment, onPreview, onRequestRemove, futureDone, onToggleFutureDone, pixKeys }) {
+const PIX_PROOF_DOMAINS = [
+  { domain: 'saldo', label: 'Pix único' },
+  { domain: 'total', label: 'Pix normal' },
+  { domain: 'futuro', label: 'Pix futuro' },
+];
+
+function PixPairLine({ pair, name, monthKey, monthLabel, paymentStatus, onConfirmPayment, onPreview, onRequestRemove, futureDone, onToggleFutureDone, pixKeys }) {
+  const [open, setOpen] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState(null);
-  const isPayer = t.from === name;
-  const counterparty = isPayer ? t.to : t.from;
-  const { record } = getPaymentRecord(paymentStatus, domain, name, monthKey, counterparty);
+  const { counterparty, owe, owed, net } = pair;
+  const settled = Math.abs(net) < 0.005;
+  const isPayer = net < 0 && !settled;
+  const payer = isPayer ? name : counterparty;
+  const receiver = isPayer ? counterparty : name;
+  const oweTotal = owe.reduce((s, e) => s + e.amount, 0);
+  const owedTotal = owed.reduce((s, e) => s + e.amount, 0);
+
+  const proofs = [];
+  [[name, counterparty], [counterparty, name]].forEach(([from, to]) => {
+    PIX_PROOF_DOMAINS.forEach(({ domain, label }) => {
+      const rec = paymentStatus[`${domain}__${from}__${monthKey}__${to}`];
+      if (rec?.paid) proofs.push({ domain, label, from, to, rec });
+    });
+  });
+  const paid = settled || proofs.some((p) => p.from === payer);
 
   async function handleFile(file) {
     if (!file) return;
@@ -2380,8 +2434,9 @@ function TransferLine({ t, name, domain, monthKey, monthLabel, paymentStatus, on
     setUploading(true);
     try {
       const dataUrl = await readAndCompressImage(file);
-      await onConfirmPayment(domain, name, monthKey, monthLabel, dataUrl, counterparty);
-      if (domain === 'futuro' && onToggleFutureDone && !(futureDone && futureDone[`${name}__${monthKey}`])) {
+      await onConfirmPayment('saldo', name, monthKey, monthLabel, dataUrl, counterparty);
+      const owesFuture = owe.some((e) => e.kind === 'futuro');
+      if (owesFuture && onToggleFutureDone && !(futureDone && futureDone[`${name}__${monthKey}`])) {
         onToggleFutureDone(name, monthKey, monthLabel);
       }
     } catch (err) {
@@ -2391,35 +2446,88 @@ function TransferLine({ t, name, domain, monthKey, monthLabel, paymentStatus, on
     }
   }
 
+  const tag = (e) => (e.kind === 'futuro' ? `futuro ${e.installment}/${e.installments}` : `parcela ${e.installment}/${e.installments}`);
+
   return (
-    <div>
-      <div className="flex items-center gap-1.5 text-xs" style={{ color: isPayer ? CORAL : JADE_DARK }}>
-        <span>{isPayer ? 'Você paga pra' : 'Você recebe de'}</span>
+    <div className="rounded-lg" style={{ background: 'white', border: `1px solid ${LINE}` }}>
+      <button onClick={() => setOpen((v) => !v)} className="w-full flex items-center gap-1.5 text-xs px-2.5 py-2 text-left active:opacity-70 transition-opacity"
+        style={{ color: settled ? '#7A867F' : isPayer ? CORAL : JADE_DARK }}>
+        <span>{settled ? 'Zerado com' : isPayer ? 'Você paga pra' : 'Você recebe de'}</span>
         <span className="font-medium">{counterparty}</span>
         {isPayer && <CopyPixButton pixKey={pixKeys?.[counterparty]} />}
-        <span className="ml-auto font-medium">R$ {brl(t.amount)}</span>
-      </div>
-      {isPayer && (
-        <div className="flex items-center justify-end gap-2 mt-0.5">
-          {record?.paid ? (
-            <>
-              <button onClick={() => onPreview(record.proof)} className="text-[11px] font-medium active:opacity-60 transition-opacity" style={{ color: JADE_DARK }}>
-                Ver comprovante
-              </button>
-              <button onClick={() => onRequestRemove({ domain, monthKey, counterparty, label: monthLabel })} className="text-[11px] active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
-                Remover
-              </button>
-            </>
-          ) : (
-            <label className="text-[11px] font-medium active:opacity-60 transition-opacity" style={{ color: JADE_DARK, cursor: uploading ? 'default' : 'pointer' }}>
-              {uploading ? 'Enviando...' : 'Anexar comprovante'}
-              <input type="file" accept="image/*" className="hidden" disabled={uploading}
-                onChange={(e) => { handleFile(e.target.files[0]); e.target.value = ''; }} />
-            </label>
+        {!settled && (
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full shrink-0"
+            style={paid ? { background: JADE_TINT, color: JADE_DARK } : { background: '#FCF3E3', color: '#8A5A12' }}>
+            {paid ? 'pago' : 'pendente'}
+          </span>
+        )}
+        <span className="ml-auto font-medium" style={{ fontVariantNumeric: 'tabular-nums' }}>R$ {brl(Math.abs(net))}</span>
+        {open ? <ChevronUp size={13} className="shrink-0" style={{ color: '#96A19C' }} /> : <ChevronDown size={13} className="shrink-0" style={{ color: '#96A19C' }} />}
+      </button>
+
+      {open && (
+        <div className="px-2.5 pb-2.5 space-y-2 text-[11px]" style={{ borderTop: `1px solid ${LINE}`, fontVariantNumeric: 'tabular-nums' }}>
+          {owe.length > 0 && (
+            <div className="pt-2 space-y-0.5">
+              <div className="font-medium" style={{ color: CORAL }}>Você deve a {counterparty}</div>
+              {owe.map((e, i) => (
+                <div key={i} className="flex items-center justify-between gap-2" style={{ color: '#4A5651' }}>
+                  <span className="min-w-0 truncate">{e.label} <span style={{ color: '#96A19C' }}>· {tag(e)}</span></span>
+                  <span className="shrink-0" style={{ color: CORAL }}>− R$ {brl(e.amount)}</span>
+                </div>
+              ))}
+              {owe.length > 1 && (
+                <div className="flex justify-between font-medium pt-0.5" style={{ color: CORAL }}><span>Subtotal</span><span>− R$ {brl(oweTotal)}</span></div>
+              )}
+            </div>
           )}
+          {owed.length > 0 && (
+            <div className="pt-1 space-y-0.5">
+              <div className="font-medium" style={{ color: JADE_DARK }}>{counterparty} te deve</div>
+              {owed.map((e, i) => (
+                <div key={i} className="flex items-center justify-between gap-2" style={{ color: '#4A5651' }}>
+                  <span className="min-w-0 truncate">{e.label} <span style={{ color: '#96A19C' }}>· {tag(e)}</span></span>
+                  <span className="shrink-0" style={{ color: JADE_DARK }}>+ R$ {brl(e.amount)}</span>
+                </div>
+              ))}
+              {owed.length > 1 && (
+                <div className="flex justify-between font-medium pt-0.5" style={{ color: JADE_DARK }}><span>Subtotal</span><span>+ R$ {brl(owedTotal)}</span></div>
+              )}
+            </div>
+          )}
+          <div className="flex justify-between font-medium pt-1.5 text-xs" style={{ borderTop: `1px dashed ${LINE}`, color: INK }}>
+            <span>{settled ? 'Saldo zerado' : `${owedTotal > 0 && oweTotal > 0 ? `${brl(owedTotal)} − ${brl(oweTotal)} = ` : ''}${payer} paga a ${receiver}`}</span>
+            <span>R$ {brl(Math.abs(net))}</span>
+          </div>
+          <p style={{ color: '#96A19C' }}>"parcela" = despesa já paga dividida em parcelas; "futuro" = dinheiro que o responsável está guardando até a compra.</p>
+
+          {proofs.length > 0 && (
+            <div className="space-y-1 pt-1">
+              {proofs.map((p) => (
+                <div key={`${p.domain}-${p.from}`} className="flex items-center justify-between gap-2">
+                  <span style={{ color: '#7A867F' }}>Comprovante de {p.from} ({p.label})</span>
+                  <span className="flex items-center gap-2 shrink-0">
+                    <button onClick={() => onPreview(p.rec.proof)} className="font-medium active:opacity-60" style={{ color: JADE_DARK }}>Ver</button>
+                    {p.from === name && (
+                      <button onClick={() => onRequestRemove({ domain: p.domain, monthKey, counterparty, label: monthLabel })} className="active:opacity-60" style={{ color: '#96A19C' }}>Remover</button>
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {isPayer && (
+            <div className="flex justify-end">
+              <label className="font-medium active:opacity-60 transition-opacity" style={{ color: JADE_DARK, cursor: uploading ? 'default' : 'pointer' }}>
+                {uploading ? 'Enviando...' : proofs.some((p) => p.from === name) ? 'Anexar outro comprovante' : 'Anexar comprovante'}
+                <input type="file" accept="image/*" className="hidden" disabled={uploading}
+                  onChange={(e) => { handleFile(e.target.files[0]); e.target.value = ''; }} />
+              </label>
+            </div>
+          )}
+          {error && <p className="text-right" style={{ color: CORAL }}>{error}</p>}
         </div>
       )}
-      {error && <p className="text-[10px] text-right" style={{ color: CORAL }}>{error}</p>}
     </div>
   );
 }
