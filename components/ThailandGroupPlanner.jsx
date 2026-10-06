@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   MapPin, Plus, Trash2, Star, Users, Wallet, Route, Calendar,
   ChevronUp, ChevronDown, ChevronRight, ChevronLeft, X, Link as LinkIcon,
-  Loader2, RefreshCw, List, CheckCircle2, AlertTriangle, Copy, Check, History
+  Loader2, RefreshCw, List, CheckCircle2, AlertTriangle, Copy, Check, History, Plane
 } from 'lucide-react';
 
 const INK = '#1C2A27';
@@ -951,29 +951,75 @@ function CountdownBanner() {
     { label: 'seg', value: totalSec % 60 },
   ];
   const tripDay = daysBetween(TRIP_START, new Date(now.getFullYear(), now.getMonth(), now.getDate())) + 1;
+  const [days, hours, mins, secs] = units.map((u) => u.value);
+  const pad = (n) => String(n).padStart(2, '0');
+  const progress = started ? 100 : Math.min(96, Math.max(4, (1 - totalSec / (365 * 86400)) * 100));
+  const departureLabel = `${WEEKDAYS_PT[TRIP_START.getDay()]}, ${fmtDate(TRIP_START)} ${TRIP_START.getFullYear()}`;
 
   return (
-    <div className="rounded-2xl px-4 py-3.5" style={{ background: `linear-gradient(135deg, ${JADE} 0%, ${JADE_DARK} 100%)`, color: 'white' }}>
-      <div className="flex items-center justify-between mb-2.5">
-        <span className="text-xs uppercase tracking-wide" style={{ opacity: 0.8 }}>
-          {started ? 'Já estamos na Tailândia' : 'Contagem regressiva'}
-        </span>
-        <span className="text-xs" style={{ opacity: 0.8 }}>Embarque {fmtDate(TRIP_START)} {TRIP_START.getFullYear()}</span>
-      </div>
-      {started ? (
-        <div className="text-2xl" style={{ fontFamily: "'Fraunces', serif" }}>Dia {tripDay} da viagem 🌴</div>
-      ) : (
-        <div className="grid grid-cols-4 gap-2">
-          {units.map((u) => (
-            <div key={u.label} className="rounded-xl py-2 text-center" style={{ background: 'rgba(255,255,255,0.14)' }}>
-              <div className="text-2xl leading-none" style={{ fontFamily: "'Fraunces', serif", fontVariantNumeric: 'tabular-nums' }}>
-                {u.label === 'dias' ? u.value : String(u.value).padStart(2, '0')}
-              </div>
-              <div className="text-[10px] uppercase tracking-wide mt-1" style={{ opacity: 0.8 }}>{u.label}</div>
-            </div>
-          ))}
+    <div className="relative overflow-hidden rounded-3xl px-5 pt-4 pb-5 shadow-sm"
+      style={{ background: `linear-gradient(150deg, #0F7F62 0%, ${JADE} 45%, #064A3A 100%)`, color: 'white' }}>
+      <div className="absolute rounded-full pointer-events-none"
+        style={{ width: 220, height: 220, top: -110, right: -70, background: 'radial-gradient(circle, rgba(244,196,106,0.55) 0%, rgba(244,196,106,0) 70%)' }} />
+      <div className="absolute rounded-full pointer-events-none"
+        style={{ width: 160, height: 160, bottom: -90, left: -50, background: 'radial-gradient(circle, rgba(255,255,255,0.12) 0%, rgba(255,255,255,0) 70%)' }} />
+
+      <div className="relative">
+        <div className="flex items-end justify-between text-[11px] tracking-wide" style={{ color: 'rgba(255,255,255,0.75)' }}>
+          <div>
+            <div className="text-base font-medium leading-none" style={{ color: 'white', letterSpacing: 1 }}>GRU</div>
+            <div className="mt-1">São Paulo</div>
+          </div>
+          <div className="text-right">
+            <div className="text-base font-medium leading-none" style={{ color: 'white', letterSpacing: 1 }}>BKK</div>
+            <div className="mt-1">Bangkok</div>
+          </div>
         </div>
-      )}
+
+        <div className="relative h-5 my-2">
+          <div className="absolute left-0 right-0 top-1/2" style={{ borderTop: '1.5px dashed rgba(255,255,255,0.35)' }} />
+          <div className="absolute left-0 top-1/2 h-[1.5px] -translate-y-px" style={{ width: `${progress}%`, background: 'rgba(255,255,255,0.9)' }} />
+          <span className="absolute top-1/2 w-2 h-2 -translate-y-1/2 rounded-full" style={{ left: 0, background: 'white' }} />
+          <span className="absolute top-1/2 w-2 h-2 -translate-y-1/2 rounded-full" style={{ right: 0, border: '1.5px solid white' }} />
+          <span className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 flex items-center justify-center w-6 h-6 rounded-full"
+            style={{ left: `${progress}%`, background: 'white', color: JADE_DARK, boxShadow: '0 2px 8px rgba(0,0,0,0.18)' }}>
+            <Plane size={13} style={{ transform: 'rotate(45deg)' }} />
+          </span>
+        </div>
+
+        {started ? (
+          <div className="mt-3">
+            <div className="text-[11px] uppercase tracking-[0.18em]" style={{ color: 'rgba(255,255,255,0.75)' }}>Já estamos na Tailândia</div>
+            <div className="text-4xl mt-1" style={{ fontFamily: "'Fraunces', serif" }}>Dia {tripDay}</div>
+          </div>
+        ) : (
+          <div className="flex items-end justify-between gap-3 mt-3">
+            <div>
+              <div className="text-[11px] uppercase tracking-[0.18em]" style={{ color: 'rgba(255,255,255,0.75)' }}>Faltam</div>
+              <div className="flex items-baseline gap-2 mt-0.5">
+                <span className="leading-none" style={{ fontFamily: "'Fraunces', serif", fontSize: 52, fontVariantNumeric: 'tabular-nums' }}>{days}</span>
+                <span className="text-lg" style={{ fontFamily: "'Fraunces', serif", color: 'rgba(255,255,255,0.85)' }}>dia{days === 1 ? '' : 's'}</span>
+              </div>
+            </div>
+            <div className="flex items-start gap-1 pb-1" style={{ fontVariantNumeric: 'tabular-nums' }}>
+              {[[hours, 'h'], [mins, 'min'], [secs, 's']].map(([v, l], idx) => (
+                <React.Fragment key={l}>
+                  {idx > 0 && <span className="text-xl leading-none" style={{ color: 'rgba(255,255,255,0.5)' }}>:</span>}
+                  <div className="text-center">
+                    <div className="text-xl leading-none font-medium">{pad(v)}</div>
+                    <div className="text-[9px] uppercase tracking-wide mt-1" style={{ color: 'rgba(255,255,255,0.65)' }}>{l}</div>
+                  </div>
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="mt-3 pt-3 flex items-center justify-between text-[11px]" style={{ borderTop: '1px solid rgba(255,255,255,0.15)', color: 'rgba(255,255,255,0.8)' }}>
+          <span>Embarque · {departureLabel}</span>
+          <span>Tailândia em grupo</span>
+        </div>
+      </div>
     </div>
   );
 }
