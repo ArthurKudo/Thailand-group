@@ -199,22 +199,40 @@ function parseISODate(iso) {
   const [y, m, d] = iso.split('-').map(Number);
   return new Date(y, m - 1, d);
 }
+function paidBeforeFutureAmount(item) {
+  return item.futurePayment ? Number(item.paidBeforeFuture?.amount) || 0 : 0;
+}
+function paidBeforeFutureExpense(item, base) {
+  const amount = paidBeforeFutureAmount(item);
+  if (!amount || !item.paidBeforeFuture.month) return [];
+  const [y, m] = item.paidBeforeFuture.month.split('-').map(Number);
+  return [{
+    ...base,
+    id: `${base.id}-pago-antes`,
+    description: `${base.description} (parcela já paga antes de virar futuro)`,
+    amount,
+    installments: 1,
+    purchaseDate: isoDateFromDate(new Date(y, m - 2, 1)),
+    isFuturePayment: false,
+  }];
+}
 function accommodationsToExpenses(list, scheduled) {
-  return list.filter((item) => item.addedToBudget).map((item) => {
+  return list.filter((item) => item.addedToBudget).flatMap((item) => {
     const stop = scheduled.find((s) => s.city === item.city);
     const totalPrice = item.totalPrice ?? ((Number(item.dailyRate) || 0) * (Number(item.nights) || 0));
-    return {
+    const base = {
       id: `acc-${item.id}`,
       city: item.city,
       kind: 'hospedagem',
       description: `Hospedagem: ${item.name} (${item.city})`,
-      amount: Number(totalPrice) || 0,
+      amount: (Number(totalPrice) || 0) - paidBeforeFutureAmount(item),
       installments: Math.max(1, Number(item.installments) || 1),
       paidBy: item.paidBy || null,
       splitWith: item.splitWith || [],
       purchaseDate: item.purchaseDate || (stop ? isoDateFromDate(stop.start) : null),
       isFuturePayment: !!item.futurePayment,
     };
+    return [base, ...paidBeforeFutureExpense(item, base)];
   });
 }
 function nextMonthKey() {
@@ -223,26 +241,29 @@ function nextMonthKey() {
   return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
 }
 function futureItemTotal(item, kind) {
-  if (kind === 'hospedagem') return item.totalPrice ?? ((Number(item.dailyRate) || 0) * (Number(item.nights) || 0));
-  return (Number(item.pricePerPerson) || 0) * ((item.splitWith && item.splitWith.length) || 0);
+  const full = kind === 'hospedagem'
+    ? item.totalPrice ?? ((Number(item.dailyRate) || 0) * (Number(item.nights) || 0))
+    : (Number(item.pricePerPerson) || 0) * ((item.splitWith && item.splitWith.length) || 0);
+  return (Number(full) || 0) - paidBeforeFutureAmount(item);
 }
 function activitiesToExpenses(list, scheduled) {
-  return list.filter((item) => item.addedToBudget).map((item) => {
+  return list.filter((item) => item.addedToBudget).flatMap((item) => {
     const stop = scheduled.find((s) => s.city === item.city);
     const guests = (item.splitWith && item.splitWith.length) || 0;
     const total = (Number(item.pricePerPerson) || 0) * guests;
-    return {
+    const base = {
       id: `act-${item.id}`,
       city: item.city,
       kind: 'passeio',
       description: `Passeio: ${item.name} (${item.city})`,
-      amount: total,
+      amount: total - paidBeforeFutureAmount(item),
       installments: Math.max(1, Number(item.installments) || 1),
       paidBy: item.paidBy || null,
       splitWith: item.splitWith || [],
       purchaseDate: item.purchaseDate || (stop ? isoDateFromDate(stop.start) : null),
       isFuturePayment: !!item.futurePayment,
     };
+    return [base, ...paidBeforeFutureExpense(item, base)];
   });
 }
 function computeFuturePaymentSchedule(items) {
@@ -1467,19 +1488,19 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
   const guests = split.length;
 
   function addToBudget(payer) {
-    const patch = { addedToBudget: true, futurePayment: false, futurePaymentDate: null, futurePaymentStart: null, paidBy: payer, installments: Math.max(1, Number(budgetInstallments) || 1) };
+    const patch = { addedToBudget: true, futurePayment: false, futurePaymentDate: null, futurePaymentStart: null, paidBeforeFuture: null, paidBy: payer, installments: Math.max(1, Number(budgetInstallments) || 1) };
     if (budgetDate) patch.purchaseDate = budgetDate;
     onEdit(item.id, patch);
     onLog(`adicionou a ${kindLabel} "${item.name}" às despesas (pago por ${payer})`);
     setChoosingPayer(false);
   }
   function addFuturePayment(responsible) {
-    onEdit(item.id, { addedToBudget: true, futurePayment: true, paidBy: responsible, futurePaymentDate: futureDate || null, futurePaymentStart: nextMonthKey(), purchaseDate: null });
+    onEdit(item.id, { addedToBudget: true, futurePayment: true, paidBy: responsible, futurePaymentDate: futureDate || null, futurePaymentStart: nextMonthKey(), paidBeforeFuture: null, purchaseDate: null });
     onLog(`marcou a ${kindLabel} "${item.name}" como pagamento futuro (${responsible} guarda até ${futureDate || 'data a definir'})`);
     setChoosingFuturePayment(false);
   }
   function removeFromBudget() {
-    onEdit(item.id, { addedToBudget: false, futurePayment: false, futurePaymentDate: null, futurePaymentStart: null, paidBy: null });
+    onEdit(item.id, { addedToBudget: false, futurePayment: false, futurePaymentDate: null, futurePaymentStart: null, paidBeforeFuture: null, paidBy: null });
     onLog(`removeu a ${kindLabel} "${item.name}" das despesas`);
     setConfirmRemoveBudget(false);
   }
@@ -1818,7 +1839,7 @@ function FuturosSection({ items, schedule, members, onEditActivity, onEditAccomm
 
   function removeFuturePayment(item) {
     const editFn = item.kind === 'hospedagem' ? onEditAccommodation : onEditActivity;
-    editFn(item.id, { futurePayment: false, futurePaymentDate: null, futurePaymentStart: null, addedToBudget: false, paidBy: null });
+    editFn(item.id, { futurePayment: false, futurePaymentDate: null, futurePaymentStart: null, paidBeforeFuture: null, addedToBudget: false, paidBy: null });
     onLog(`removeu o pagamento futuro d${item.kind === 'hospedagem' ? 'a hospedagem' : 'o passeio'} "${item.name}"`);
     setConfirmRemoveTarget(null);
   }
@@ -1859,6 +1880,7 @@ function FuturosSection({ items, schedule, members, onEditActivity, onEditAccomm
                 <div className="text-xs mt-0.5" style={{ color: '#7A867F' }}>
                   {item.kind === 'hospedagem' ? 'Hospedagem' : 'Passeio'} · {item.city} · {item.paidBy} guarda até {item.futurePaymentDate ? fmtDate(parseISODate(item.futurePaymentDate)) : '—'}
                   {item.futurePaymentStart && item.futurePaymentStart > '2026-09' ? ` · parcelas desde ${MONTHS_PT[Number(item.futurePaymentStart.slice(5, 7)) - 1]}/${item.futurePaymentStart.slice(2, 4)}` : ''}
+                  {paidBeforeFutureAmount(item) > 0 ? ` · R$ ${brl(paidBeforeFutureAmount(item))} já pago em ${MONTHS_PT[Number(item.paidBeforeFuture.month.slice(5, 7)) - 1]}/${item.paidBeforeFuture.month.slice(2, 4)} (fora do futuro)` : ''}
                 </div>
                 <button onClick={() => setConfirmRemoveTarget(item)} className="text-[11px] mt-1.5 active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
                   Remover pagamento futuro
