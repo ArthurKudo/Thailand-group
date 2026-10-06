@@ -717,15 +717,6 @@ export default function ThailandGroupPlanner() {
     });
   }, [itinerary]);
 
-  const feriasStatus = useMemo(() => {
-    const feriasStops = scheduled.filter((s) => s.phase === 'ferias');
-    const totalDays = uniqueDateCount(feriasStops);
-    const projectedEnd = feriasStops.length ? feriasStops[feriasStops.length - 1].end : TRIP_START;
-    const budget = daysBetween(TRIP_START, FERIAS_DEADLINE) + 1;
-    const diff = budget - totalDays;
-    return { totalDays, projectedEnd, budget, diff, onTrack: diff >= 0 };
-  }, [scheduled]);
-
   const tripEnd = scheduled.length ? scheduled[scheduled.length - 1].end : TRIP_START;
 
   const totalsByPhase = useMemo(() => {
@@ -883,7 +874,7 @@ export default function ThailandGroupPlanner() {
         </div>
 
         <div className="px-4 mb-4">
-          <DeadlineBanner status={feriasStatus} />
+          <CountdownBanner />
         </div>
 
         <div className="flex gap-1 px-4 mb-5 overflow-x-auto" style={{ borderBottom: `1px solid ${LINE}` }}>
@@ -943,34 +934,46 @@ export default function ThailandGroupPlanner() {
   );
 }
 
-function DeadlineBanner({ status }) {
-  const { onTrack, diff, projectedEnd } = status;
-  const color = onTrack ? JADE : CORAL;
-  const tint = onTrack ? JADE_TINT : CORAL_TINT;
-  const border = onTrack ? '#BFE3D5' : '#F3C7B4';
+function CountdownBanner() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const diffMs = TRIP_START - now;
+  const started = diffMs <= 0;
+  const totalSec = Math.max(0, Math.floor(diffMs / 1000));
+  const units = [
+    { label: 'dias', value: Math.floor(totalSec / 86400) },
+    { label: 'horas', value: Math.floor((totalSec % 86400) / 3600) },
+    { label: 'min', value: Math.floor((totalSec % 3600) / 60) },
+    { label: 'seg', value: totalSec % 60 },
+  ];
+  const tripDay = daysBetween(TRIP_START, new Date(now.getFullYear(), now.getMonth(), now.getDate())) + 1;
+
   return (
-    <div className="rounded-2xl px-4 py-3.5 flex items-center gap-3" style={{ background: tint, border: `1px solid ${border}` }}>
-      <div
-        className="shrink-0 flex flex-col items-center justify-center rounded-full text-center"
-        style={{
-          width: 56, height: 56, border: `2px dashed ${color}`, color, transform: 'rotate(-8deg)',
-          fontFamily: "'Fraunces', serif",
-        }}
-      >
-        <span style={{ fontSize: 9, letterSpacing: 0.5, lineHeight: 1 }}>{onTrack ? 'NO' : 'FORA DO'}</span>
-        <span style={{ fontSize: 9, letterSpacing: 0.5, lineHeight: 1, marginTop: 2 }}>PRAZO</span>
+    <div className="rounded-2xl px-4 py-3.5" style={{ background: `linear-gradient(135deg, ${JADE} 0%, ${JADE_DARK} 100%)`, color: 'white' }}>
+      <div className="flex items-center justify-between mb-2.5">
+        <span className="text-xs uppercase tracking-wide" style={{ opacity: 0.8 }}>
+          {started ? 'Já estamos na Tailândia' : 'Contagem regressiva'}
+        </span>
+        <span className="text-xs" style={{ opacity: 0.8 }}>Embarque {fmtDate(TRIP_START)} {TRIP_START.getFullYear()}</span>
       </div>
-      <div className="min-w-0">
-        <div className="text-sm font-medium" style={{ color: onTrack ? JADE_DARK : '#8A3418' }}>
-          Deadline das férias: 02 mar
+      {started ? (
+        <div className="text-2xl" style={{ fontFamily: "'Fraunces', serif" }}>Dia {tripDay} da viagem 🌴</div>
+      ) : (
+        <div className="grid grid-cols-4 gap-2">
+          {units.map((u) => (
+            <div key={u.label} className="rounded-xl py-2 text-center" style={{ background: 'rgba(255,255,255,0.14)' }}>
+              <div className="text-2xl leading-none" style={{ fontFamily: "'Fraunces', serif", fontVariantNumeric: 'tabular-nums' }}>
+                {u.label === 'dias' ? u.value : String(u.value).padStart(2, '0')}
+              </div>
+              <div className="text-[10px] uppercase tracking-wide mt-1" style={{ opacity: 0.8 }}>{u.label}</div>
+            </div>
+          ))}
         </div>
-        <div className="text-xs mt-0.5" style={{ color: onTrack ? '#3F6E60' : '#A2492A' }}>
-          {onTrack
-            ? `Roteiro atual termina em ${fmtDate(projectedEnd)} — ${diff} dia${diff === 1 ? '' : 's'} de folga`
-            : `Roteiro atual termina em ${fmtDate(projectedEnd)} — ${Math.abs(diff)} dia${Math.abs(diff) === 1 ? '' : 's'} além do prazo`}
-        </div>
-      </div>
-      {onTrack ? <CheckCircle2 size={18} className="shrink-0 ml-auto" style={{ color: JADE }} /> : <AlertTriangle size={18} className="shrink-0 ml-auto" style={{ color: CORAL }} />}
+      )}
     </div>
   );
 }
