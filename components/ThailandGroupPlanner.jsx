@@ -2406,6 +2406,11 @@ const PIX_PROOF_DOMAINS = [
   { domain: 'total', label: 'Pix normal' },
   { domain: 'futuro', label: 'Pix futuro' },
 ];
+const LEGACY_MONTH_PROOF_DOMAINS = [
+  { domain: 'total', label: 'Pix do mês' },
+  { domain: 'geral', label: 'Outras do mês' },
+  { domain: 'viagem', label: 'Viagem do mês' },
+];
 
 function PixPairLine({ pair, name, monthKey, monthLabel, paymentStatus, onConfirmPayment, onPreview, onRequestRemove, futureDone, onToggleFutureDone, pixKeys }) {
   const [open, setOpen] = useState(false);
@@ -2423,7 +2428,11 @@ function PixPairLine({ pair, name, monthKey, monthLabel, paymentStatus, onConfir
   [[name, counterparty], [counterparty, name]].forEach(([from, to]) => {
     PIX_PROOF_DOMAINS.forEach(({ domain, label }) => {
       const rec = paymentStatus[`${domain}__${from}__${monthKey}__${to}`];
-      if (rec?.paid) proofs.push({ domain, label, from, to, rec });
+      if (rec?.paid) proofs.push({ domain, label, from, to, rec, key: `${domain}-${from}` });
+    });
+    LEGACY_MONTH_PROOF_DOMAINS.forEach(({ domain, label }) => {
+      const rec = paymentStatus[`${domain}__${from}__${monthKey}`];
+      if (rec?.paid) proofs.push({ domain, label, from, to, rec, legacyMonth: true, key: `${domain}-${from}-mes` });
     });
   });
   const paid = settled || proofs.some((p) => p.from === payer);
@@ -2504,11 +2513,11 @@ function PixPairLine({ pair, name, monthKey, monthLabel, paymentStatus, onConfir
           {proofs.length > 0 && (
             <div className="space-y-1 pt-1">
               {proofs.map((p) => (
-                <div key={`${p.domain}-${p.from}`} className="flex items-center justify-between gap-2">
+                <div key={p.key} className="flex items-center justify-between gap-2">
                   <span style={{ color: '#7A867F' }}>Comprovante de {p.from} ({p.label})</span>
                   <span className="flex items-center gap-2 shrink-0">
                     <button onClick={() => onPreview(p.rec.proof)} className="font-medium active:opacity-60" style={{ color: JADE_DARK }}>Ver</button>
-                    {p.from === name && (
+                    {p.from === name && !p.legacyMonth && (
                       <button onClick={() => onRequestRemove({ domain: p.domain, monthKey, counterparty, label: monthLabel })} className="active:opacity-60" style={{ color: '#96A19C' }}>Remover</button>
                     )}
                   </span>
