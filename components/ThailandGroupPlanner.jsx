@@ -217,6 +217,11 @@ function accommodationsToExpenses(list, scheduled) {
     };
   });
 }
+function nextMonthKey() {
+  const d = new Date();
+  const next = new Date(d.getFullYear(), d.getMonth() + 1, 1);
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
+}
 function futureItemTotal(item, kind) {
   if (kind === 'hospedagem') return item.totalPrice ?? ((Number(item.dailyRate) || 0) * (Number(item.nights) || 0));
   return (Number(item.pricePerPerson) || 0) * ((item.splitWith && item.splitWith.length) || 0);
@@ -242,11 +247,13 @@ function activitiesToExpenses(list, scheduled) {
 }
 function computeFuturePaymentSchedule(items) {
   const months = {};
-  const nowStart = FUTURE_PAYMENT_START;
   items.forEach((item) => {
     if (!item.futurePayment || !item.futurePaymentDate || !item.paidBy) return;
     const total = Number(item.total) || 0;
     if (!total) return;
+    const [sy, sm] = (item.futurePaymentStart || '').split('-').map(Number);
+    const itemStart = sy && sm ? new Date(sy, sm - 1, 1) : FUTURE_PAYMENT_START;
+    const nowStart = itemStart > FUTURE_PAYMENT_START ? itemStart : FUTURE_PAYMENT_START;
     const [dy, dm] = item.futurePaymentDate.split('-').map(Number);
     if (!dy || !dm) return;
     const deadlineStart = new Date(dy, dm - 1, 1);
@@ -1460,19 +1467,19 @@ function OptionCard({ item, type, myName, members, onEdit, onRemove, onRate, onL
   const guests = split.length;
 
   function addToBudget(payer) {
-    const patch = { addedToBudget: true, futurePayment: false, futurePaymentDate: null, paidBy: payer, installments: Math.max(1, Number(budgetInstallments) || 1) };
+    const patch = { addedToBudget: true, futurePayment: false, futurePaymentDate: null, futurePaymentStart: null, paidBy: payer, installments: Math.max(1, Number(budgetInstallments) || 1) };
     if (budgetDate) patch.purchaseDate = budgetDate;
     onEdit(item.id, patch);
     onLog(`adicionou a ${kindLabel} "${item.name}" às despesas (pago por ${payer})`);
     setChoosingPayer(false);
   }
   function addFuturePayment(responsible) {
-    onEdit(item.id, { addedToBudget: true, futurePayment: true, paidBy: responsible, futurePaymentDate: futureDate || null, purchaseDate: null });
+    onEdit(item.id, { addedToBudget: true, futurePayment: true, paidBy: responsible, futurePaymentDate: futureDate || null, futurePaymentStart: nextMonthKey(), purchaseDate: null });
     onLog(`marcou a ${kindLabel} "${item.name}" como pagamento futuro (${responsible} guarda até ${futureDate || 'data a definir'})`);
     setChoosingFuturePayment(false);
   }
   function removeFromBudget() {
-    onEdit(item.id, { addedToBudget: false, futurePayment: false, futurePaymentDate: null, paidBy: null });
+    onEdit(item.id, { addedToBudget: false, futurePayment: false, futurePaymentDate: null, futurePaymentStart: null, paidBy: null });
     onLog(`removeu a ${kindLabel} "${item.name}" das despesas`);
     setConfirmRemoveBudget(false);
   }
@@ -1811,7 +1818,7 @@ function FuturosSection({ items, schedule, members, onEditActivity, onEditAccomm
 
   function removeFuturePayment(item) {
     const editFn = item.kind === 'hospedagem' ? onEditAccommodation : onEditActivity;
-    editFn(item.id, { futurePayment: false, futurePaymentDate: null, addedToBudget: false, paidBy: null });
+    editFn(item.id, { futurePayment: false, futurePaymentDate: null, futurePaymentStart: null, addedToBudget: false, paidBy: null });
     onLog(`removeu o pagamento futuro d${item.kind === 'hospedagem' ? 'a hospedagem' : 'o passeio'} "${item.name}"`);
     setConfirmRemoveTarget(null);
   }
@@ -1851,6 +1858,7 @@ function FuturosSection({ items, schedule, members, onEditActivity, onEditAccomm
                 </div>
                 <div className="text-xs mt-0.5" style={{ color: '#7A867F' }}>
                   {item.kind === 'hospedagem' ? 'Hospedagem' : 'Passeio'} · {item.city} · {item.paidBy} guarda até {item.futurePaymentDate ? fmtDate(parseISODate(item.futurePaymentDate)) : '—'}
+                  {item.futurePaymentStart && item.futurePaymentStart > '2026-09' ? ` · parcelas desde ${MONTHS_PT[Number(item.futurePaymentStart.slice(5, 7)) - 1]}/${item.futurePaymentStart.slice(2, 4)}` : ''}
                 </div>
                 <button onClick={() => setConfirmRemoveTarget(item)} className="text-[11px] mt-1.5 active:opacity-60 transition-opacity" style={{ color: '#96A19C' }}>
                   Remover pagamento futuro
